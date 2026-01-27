@@ -1,0 +1,16 @@
+
+{
+  "name": "CertiVault",
+  "short_name": "CertiVault",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2912/2912761.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
