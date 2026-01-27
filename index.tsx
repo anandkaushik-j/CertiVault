@@ -52,11 +52,21 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 const STORAGE_KEY = 'certivault_pro_v4_tags_search'; 
 const USER_SESSION_KEY = 'certivault_user_session';
 const BASE_CATEGORIES = ['Competitions', 'Academics', 'Sports', 'Arts', 'Workshops', 'Volunteering', 'Other'];
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+/**
+ * FIXED SCOPES: Using fully qualified URLs for all scopes. 
+ * Combining Identity and Drive access requires explicit full URLs to satisfy modern Google OAuth policies.
+ */
+const DRIVE_SCOPE = [
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'openid'
+].join(' ');
 
 // UPDATE THESE FOR PRODUCTION
-const FAMILY_WHITELIST = ['subhavya.anand@example.com', 'admin@example.com']; 
-const GOOGLE_CLIENT_ID = ['257110771108-9u5pelqmi4krcsomp6buor1pvlqijerb.apps.googleusercontent.com']; // Replace with real Client ID from GCP Console
+const FAMILY_WHITELIST = ['subhavya.anand@example.com', 'admin@example.com', 'anandkaushik@gmail.com']; 
+const GOOGLE_CLIENT_ID = "257110771108-9u5pelqmi4krcsomp6buor1pvlqijerb.apps.googleusercontent.com"; 
 
 // --- Types ---
 interface Profile {
@@ -198,8 +208,6 @@ async function uploadFileToDrive(blob: Blob, name: string, parentId: string, acc
     mimeType: 'application/pdf'
   };
 
-  // Google Drive multipart/related upload requires a specific structure
-  // We use the Blob-concatenation method to construct it without malforming the content type
   const boundary = '-------314159265358979323846';
   const delimiter = "\r\n--" + boundary + "\r\n";
   const closeDelimiter = "\r\n--" + boundary + "--";
@@ -284,51 +292,52 @@ const CertiVault = () => {
       } catch (e) { console.error("Parse failed", e); }
     }
 
-    // Initialize OAuth Client
     const initGsi = () => {
       if (typeof (window as any).google !== 'undefined') {
-        tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: DRIVE_SCOPE,
-          callback: async (tokenResponse: any) => {
-            if (tokenResponse.error) {
-              setError("Google login failed.");
-              setIsLoggingIn(false);
-              return;
-            }
-            // Fetch user info with token
-            try {
-              const userInfoResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
-              });
-              const info = await userInfoResp.json();
-              
-              // Privacy Filter (FAMILY_WHITELIST check)
-              if (FAMILY_WHITELIST.length > 0 && !FAMILY_WHITELIST.includes(info.email)) {
-                setError("Access restricted to authorized family members only.");
+        try {
+          tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
+            client_id: GOOGLE_CLIENT_ID,
+            scope: DRIVE_SCOPE,
+            callback: async (tokenResponse: any) => {
+              if (tokenResponse.error) {
+                setError("Google login failed: " + tokenResponse.error_description || tokenResponse.error);
                 setIsLoggingIn(false);
                 return;
               }
+              try {
+                const userInfoResp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+                });
+                const info = await userInfoResp.json();
+                
+                if (FAMILY_WHITELIST.length > 0 && !FAMILY_WHITELIST.includes(info.email)) {
+                  setError(`Access restricted. ${info.email} is not in the family whitelist.`);
+                  setIsLoggingIn(false);
+                  return;
+                }
 
-              const userData: User = {
-                name: info.name,
-                firstName: info.given_name || info.name.split(' ')[0],
-                initials: (info.name[0] + (info.family_name ? info.family_name[0] : '')).toUpperCase(),
-                email: info.email,
-                picture: info.picture,
-                accessToken: tokenResponse.access_token
-              };
-              setUser(userData);
-              localStorage.setItem(USER_SESSION_KEY, JSON.stringify(userData));
-            } catch (err) {
-              setError("Failed to fetch user profile info.");
-            } finally {
-              setIsLoggingIn(false);
+                const userData: User = {
+                  name: info.name,
+                  firstName: info.given_name || info.name.split(' ')[0],
+                  initials: (info.name[0] + (info.family_name ? info.family_name[0] : '')).toUpperCase(),
+                  email: info.email,
+                  picture: info.picture,
+                  accessToken: tokenResponse.access_token
+                };
+                setUser(userData);
+                localStorage.setItem(USER_SESSION_KEY, JSON.stringify(userData));
+              } catch (err) {
+                setError("Logged in but failed to fetch profile info. Ensure 'userinfo.email' scope is allowed.");
+              } finally {
+                setIsLoggingIn(false);
+              }
             }
-          }
-        });
+          });
+        } catch (err) {
+          console.error("GSI Init Error", err);
+        }
       } else {
-        setTimeout(initGsi, 500); // Retry if GSI not loaded yet
+        setTimeout(initGsi, 500); 
       }
     };
     initGsi();
@@ -341,15 +350,13 @@ const CertiVault = () => {
   }, [profiles, certificates, activeProfileId, customCategories]);
 
   const handleLogin = () => {
-    if (GOOGLE_CLIENT_ID === 'PLACEHOLDER_CLIENT_ID') {
-      setError("Google Client ID is not configured. Please update it in index.tsx.");
-      return;
-    }
     setIsLoggingIn(true);
+    setError(null);
     if (tokenClientRef.current) {
-      tokenClientRef.current.requestAccessToken({ prompt: 'consent' });
+      // Prompt select_account is the most reliable way to clear stale login errors
+      tokenClientRef.current.requestAccessToken({ prompt: 'select_account' });
     } else {
-      setError("Google identity client not ready. Refresh the page.");
+      setError("Google identity client not ready. If this persists, check your Client ID or network.");
       setIsLoggingIn(false);
     }
   };
@@ -503,7 +510,7 @@ const CertiVault = () => {
 
   const syncToDrive = async () => {
     const profile = profiles.find(p => p.id === activeProfileId);
-    if (!profile || !user?.accessToken) { setError("Login to sync."); return; }
+    if (!profile || !user?.accessToken) { setError("Login with Google to sync."); return; }
     setIsSyncing(true); setSyncLogs([]);
     const log = (msg: string, st: 'pending'|'success'|'info'='pending') => setSyncLogs(p => [...p, { id: Math.random().toString(), message: msg, status: st }]);
     try {
@@ -552,7 +559,6 @@ const CertiVault = () => {
 
   const sortedAcademicYears = Object.keys(academicHierarchy).sort((a, b) => b.localeCompare(a));
 
-  // --- Render Views ---
   const renderLogin = () => (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 bg-gradient-to-br from-indigo-950 via-slate-950 to-black">
       <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
@@ -561,19 +567,20 @@ const CertiVault = () => {
             <div className="p-4 bg-indigo-600 rounded-3xl shadow-2xl"><FileText className="w-10 h-10" /></div>
             <h1 className="text-5xl font-black tracking-tighter">CertiVault</h1>
           </div>
-          <h2 className="text-3xl font-bold opacity-90">Securely Scan, Organize, and Synchronize your achievements.</h2>
+          <h2 className="text-3xl font-bold opacity-90">Securely Scan, Organize, and Synchronize achievements.</h2>
           <div className="space-y-4 opacity-70">
-            <div className="flex items-center gap-3"><Shield className="w-5 h-5" /> Google Auth & Drive Integration</div>
-            <div className="flex items-center gap-3"><Zap className="w-5 h-5" /> Gemini AI Vision Processing</div>
+            <div className="flex items-center gap-3"><Shield className="w-5 h-5" /> Google Drive Integration</div>
+            <div className="flex items-center gap-3"><Zap className="w-5 h-5" /> Gemini AI Document Vision</div>
           </div>
         </div>
         <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl space-y-8 text-center">
-          <h3 className="text-3xl font-black text-slate-900">Welcome</h3>
-          <p className="text-slate-500 font-medium">Family access only via Google Workspace</p>
-          <button onClick={handleLogin} disabled={isLoggingIn} className="w-full py-5 px-6 border-2 border-slate-100 rounded-2xl flex items-center justify-center gap-4 hover:bg-slate-50 transition-all active:scale-95 font-black text-slate-700">
+          <h3 className="text-3xl font-black text-slate-900">Sign In</h3>
+          <p className="text-slate-500 font-medium">Use your Google Account to access the family vault.</p>
+          <button onClick={handleLogin} disabled={isLoggingIn} className="w-full py-5 px-6 border-2 border-slate-100 rounded-2xl flex items-center justify-center gap-4 hover:bg-slate-50 transition-all active:scale-95 font-black text-slate-700 shadow-sm">
             {isLoggingIn ? <Loader2 className="w-6 h-6 animate-spin text-indigo-600" /> : <><img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" className="w-6 h-6" /> Sign in with Google</>}
           </button>
-          <p className="text-[10px] text-slate-400">By logging in you agree to our terms. Your data remains in your personal Google Drive.</p>
+          <div className="pt-4"><a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="text-[10px] text-indigo-500 underline font-bold">Billing & API Key Documentation</a></div>
+          <p className="text-[10px] text-slate-400">Documents are processed using Google Gemini. Your data stays in your personal Google Drive.</p>
         </div>
       </div>
     </div>
@@ -707,7 +714,7 @@ const CertiVault = () => {
                      <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase">Category</label><select value={pendingCert.category} onChange={e => setPendingCert({...pendingCert, category: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none appearance-none">{categoriesList.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                      <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase">Date</label><input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none" /></div>
                    </div>
-                   <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase">Summary</label><textarea value={pendingCert.summary} onChange={e => setPendingCert({...pendingCert, summary: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-medium outline-none min-h-[100px] resize-none" /></div>
+                   <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase">Summary</label><textarea value={pendingCert.summary} onChange={e => setPendingCert({...pendingCert, summary: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-medium outline-none min-h-[120px] resize-none" /></div>
                  </div>
                  <button onClick={saveCertificate} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black text-xl shadow-2xl hover:bg-indigo-600 transition-all">SAVE TO VAULT</button>
                </div>
