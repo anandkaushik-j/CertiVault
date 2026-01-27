@@ -2,15 +2,17 @@
 {
   "name": "CertiVault",
   "short_name": "CertiVault",
+  "description": "Securely Scan, Organize, and Synchronize your achievements.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
+  "background_color": "#000000",
   "theme_color": "#4f46e5",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/2912/2912761.png",
+      "src": "https://cdn-icons-png.flaticon.com/512/3652/3652191.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

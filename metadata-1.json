@@ -1,0 +1,7 @@
+{
+  "description": "A professional certificate scanner and manager that uses Gemini for OCR and metadata extraction, with support for Google Drive storage and PDF export.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "name": "CertiVault"
+}
