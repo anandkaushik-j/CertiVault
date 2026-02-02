@@ -173,6 +173,11 @@ const CertiVault = () => {
   }, [profiles, certificates, activeProfileId, customCategories]);
 
   const startCamera = async () => {
+    if (!activeProfileId) {
+      setError("Please create a profile first to start scanning achievements.");
+      setIsAddingProfile(true);
+      return;
+    }
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -263,6 +268,12 @@ const CertiVault = () => {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!activeProfileId) {
+      setError("Please create a profile first to upload achievements.");
+      setIsAddingProfile(true);
+      e.target.value = '';
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     setIsProcessing(true);
