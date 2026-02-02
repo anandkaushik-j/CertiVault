@@ -32,7 +32,7 @@ import {
   CheckCircle,
   RotateCw
 } from 'lucide-react';
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
 
 // --- Configuration & Constants ---
 const STORAGE_KEY = 'certivault_pro_v15_final'; 
@@ -255,8 +255,9 @@ const CertiVault = () => {
     setProcessStatus('Analyzing photo orientation...');
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
       const pureBase64 = base64Data.split(',')[1] || base64Data;
+      const initialMimeType = base64Data.match(/^data:([^;]+);base64,/)?.[1] || 'image/jpeg';
 
       const img = new Image();
       img.src = base64Data;
@@ -280,40 +281,64 @@ const CertiVault = () => {
       
       Return the final rectified image in the exact same ${orientation} orientation as the original photo.`;
 
-      const cleanupResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: { parts: [{ inlineData: { data: pureBase64, mimeType: 'image/jpeg' } }, { text: cleanupPrompt }] }
-      });
-
-      setProcessProgress(65);
-      setProcessStatus('Gemini AI: Reading certificate text...');
-
       let processedImage = base64Data;
-      if (cleanupResponse.candidates?.[0]?.content?.parts) {
-        const imagePart = cleanupResponse.candidates[0].content.parts.find(p => p.inlineData);
-        if (imagePart) processedImage = `data:image/png;base64,${imagePart.inlineData.data}`;
+      let finalMimeType = initialMimeType;
+
+      try {
+        const cleanupResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: { parts: [{ inlineData: { data: pureBase64, mimeType: initialMimeType } }, { text: cleanupPrompt }] }
+        });
+
+        if (cleanupResponse.candidates?.[0]?.content?.parts) {
+          const imagePart = cleanupResponse.candidates[0].content.parts.find(p => p.inlineData);
+          if (imagePart) {
+            processedImage = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            finalMimeType = imagePart.inlineData.mimeType;
+          }
+        }
+      } catch (e) {
+        console.warn("Perspective correction failed, falling back to original photo.", e);
       }
 
-      setProcessProgress(85);
-      setProcessStatus('Finalizing achievement data...');
+      setProcessProgress(65);
+      setProcessStatus('Gemini AI: Extracting achievement data...');
 
-      const ocrPrompt = `Extract certificate metadata into a JSON object:
-      { "title": "...", "studentName": "...", "issuer": "...", "date": "YYYY-MM-DD", "category": "...", "subject": "...", "summary": "..." }
-      - category: Competitions, Academics, Sports, Arts, Workshops, Volunteering, or Other.
-      - summary: A professional 1-sentence description.`;
-
-      const ocrResponse: GenerateContentResponse = await ai.models.generateContent({
+      const ocrResponse = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: { parts: [{ inlineData: { data: processedImage.split(',')[1], mimeType: 'image/png' } }, { text: ocrPrompt }] }
+        contents: { 
+          parts: [
+            { inlineData: { data: processedImage.split(',')[1], mimeType: finalMimeType } }, 
+            { text: "Analyze this certificate and extract its details. Ensure the category matches one of the provided standard classifications." }
+          ] 
+        },
+        config: {
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingBudget: 0 },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING, description: "Official title of the certificate" },
+              studentName: { type: Type.STRING, description: "Name of the recipient" },
+              issuer: { type: Type.STRING, description: "Organization that issued it" },
+              date: { type: Type.STRING, description: "Date of issue in YYYY-MM-DD format" },
+              category: { type: Type.STRING, description: "One of: Competitions, Academics, Sports, Arts, Workshops, Volunteering, Other" },
+              subject: { type: Type.STRING, description: "Specific field or sport mentioned" },
+              summary: { type: Type.STRING, description: "A concise 1-sentence professional summary" }
+            },
+            required: ["title", "studentName", "issuer", "date", "category", "subject", "summary"]
+          }
+        }
       });
 
       setProcessProgress(95);
 
       let extractedData: any = {};
-      const text = ocrResponse.text;
-      if (text) {
-          const match = text.match(/\{[\s\S]*\}/);
-          if (match) extractedData = JSON.parse(match[0]);
+      try {
+        extractedData = JSON.parse(ocrResponse.text || "{}");
+      } catch (e) {
+        console.error("JSON Parse Error", e);
+        throw new Error("Failed to parse certificate data.");
       }
 
       setPendingCert({
@@ -325,7 +350,7 @@ const CertiVault = () => {
         title: extractedData.title || "Certificate of Participation",
         issuer: extractedData.issuer || "",
         date: extractedData.date || "",
-        category: categoriesList.includes(extractedData.category) ? extractedData.category : 'Competitions',
+        category: categoriesList.includes(extractedData.category) ? extractedData.category : 'Other',
         subject: extractedData.subject || "",
         summary: extractedData.summary || "",
         createdAt: Date.now()
@@ -334,8 +359,8 @@ const CertiVault = () => {
       setProcessProgress(100);
       setTimeout(() => setView('editor'), 400);
     } catch (err) {
-      console.error(err);
-      setError("AI was unable to process the text. Please enter details manually.");
+      console.error("Processing pipeline failed:", err);
+      setError("AI was unable to process the text fully. Please check and correct details manually.");
       setPendingCert({
         id: Date.now().toString(), image: base64Data, originalImage: base64Data, profileId: activeProfileId,
         studentName: "", title: "New Certificate", issuer: "", date: "", category: 'Other', subject: "", summary: "", createdAt: Date.now()
@@ -605,7 +630,7 @@ const CertiVault = () => {
                 <div className="p-4"><h3 className="text-sm font-black text-slate-900 truncate">{cert.title}</h3><p className="text-[10px] text-slate-400 truncate">{cert.issuer}</p></div>
               </div>
             )) : !navPath.year ? Object.keys(academicHierarchy).sort((a,b)=>b.localeCompare(a)).map(ay => (
-              <button key={ay} onClick={() => setNavPath({ year: ay })} className="group flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all">
+              <button key={ay} onClick={() => setNavPath({ year: ay })} className="group flex flex-col items-center gap-4 p-6 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all">
                 <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-400 group-hover:bg-indigo-600 group-hover:text-white transition-all"><Folder className="w-8 h-8" /></div>
                 <div className="text-center font-black text-slate-800 tracking-tight">{ay}</div>
               </button>
