@@ -470,7 +470,7 @@ const CertiVault = () => {
                 </div>
               ))
             ) : isBrowsingRoot ? sortedYears.map(ay => (
-              <button key={ay} onClick={() => setNavPath({ year: ay })} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-50 shadow-sm hover:shadow-md active:scale-95 transition-all text-center">
+              <button key={ay} onClick={() => setNavPath({ year: ay })} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all text-center">
                 <Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" />
                 <div>
                   <span className="font-black text-slate-800 text-base block">{ay}</span>
@@ -478,7 +478,7 @@ const CertiVault = () => {
                 </div>
               </button>
             )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year!] || {}).map(cat => (
-              <button key={cat} onClick={() => setNavPath(p => ({ ...p, category: cat }))} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-50 shadow-sm hover:shadow-md active:scale-95 transition-all text-center">
+              <button key={cat} onClick={() => setNavPath(p => ({ ...p, category: cat }))} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all text-center">
                 <Folder className="w-14 h-14 text-slate-200" />
                 <div>
                   <span className="font-black text-slate-800 text-base block">{cat}</span>
@@ -497,18 +497,37 @@ const CertiVault = () => {
       )}
 
       {view === 'scanner' && (
-        <div className="fixed inset-0 bg-black z-[100] flex flex-col">
-          <video ref={videoRef} autoPlay playsInline className="flex-1 object-cover" />
-          <button onClick={() => { stopCamera(); setView('dashboard'); }} className="absolute top-8 left-8 p-4 bg-white/20 backdrop-blur-md rounded-2xl text-white"><ChevronLeft className="w-6 h-6" /></button>
-          <div className="bg-black p-10 flex justify-center">
-            <button onClick={async () => {
+        <div className="fixed inset-0 bg-black z-[100] flex flex-col overflow-hidden">
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          
+          <button 
+            onClick={() => { stopCamera(); setView('dashboard'); }} 
+            className="absolute top-8 left-8 p-4 bg-white/20 backdrop-blur-md rounded-2xl text-white hover:bg-white/30 transition-all z-[110]"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+
+          <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center z-[110] pointer-events-none">
+            <button 
+              onClick={async () => {
                 if (!videoRef.current) return;
                 const canvas = document.createElement('canvas');
                 canvas.width = videoRef.current.videoWidth; canvas.height = videoRef.current.videoHeight;
                 canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
                 const b = canvas.toDataURL('image/jpeg', 0.85);
                 stopCamera(); setView('dashboard'); await processCertificate(await resizeImage(b));
-              }} className="w-20 h-20 rounded-full border-4 border-white/30 p-1 active:scale-90 transition-transform"><div className="w-full h-full bg-white rounded-full" /></button>
+              }} 
+              className="w-20 h-20 rounded-full border-4 border-white/50 p-1 active:scale-90 transition-transform pointer-events-auto bg-transparent"
+            >
+              <div className="w-full h-full bg-white rounded-full shadow-lg" />
+            </button>
+          </div>
+          
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-80 border-2 border-white/20 rounded-xl pointer-events-none">
+            <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-white rounded-tl-lg" />
+            <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-white rounded-tr-lg" />
+            <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-white rounded-bl-lg" />
+            <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-white rounded-br-lg" />
           </div>
         </div>
       )}
