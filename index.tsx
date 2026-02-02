@@ -21,7 +21,6 @@ import {
   AlertCircle,
   Sparkles,
   ChevronDown,
-  // Added Folder icon to fix "Cannot find name 'Folder'" errors
   Folder
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
@@ -113,6 +112,10 @@ const CertiVault = () => {
   const [activeProfileId, setActiveProfileId] = useState<string>('');
   const [view, setView] = useState<'dashboard' | 'scanner' | 'editor' | 'detail'>('dashboard');
   const [navPath, setNavPath] = useState<{year?: string, category?: string}>({});
+  
+  // Define goToCategory helper to fix the "Cannot find name 'goToCategory'" error
+  const goToCategory = (category: string) => setNavPath(prev => ({ ...prev, category }));
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
@@ -388,10 +391,28 @@ const CertiVault = () => {
               <h1 className="text-2xl font-black tracking-tight text-slate-900">CertiVault</h1>
             </div>
             <div className="flex items-center gap-2">
-              <div className="bg-slate-50 px-8 py-3 rounded-full border border-slate-100 flex items-center shadow-sm transition-all">
-                  <span className="font-black text-slate-800 text-lg tracking-tight leading-none">
-                    {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
-                  </span>
+              <div className="relative group">
+                <div className="bg-slate-50 px-6 py-3 rounded-full border border-slate-100 flex items-center gap-2 shadow-sm transition-all hover:bg-slate-100 cursor-pointer">
+                    <span className="font-black text-slate-800 text-lg tracking-tight leading-none">
+                      {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
+                    </span>
+                    <ChevronDown className="w-4 h-4 text-slate-400" />
+                </div>
+                {/* Invisible select to handle native picker or a simple custom list */}
+                <select 
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full"
+                  value={activeProfileId}
+                  onChange={(e) => {
+                    setActiveProfileId(e.target.value);
+                    setNavPath({});
+                  }}
+                >
+                  {profiles.length > 0 ? (
+                    profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)
+                  ) : (
+                    <option value="">No profiles</option>
+                  )}
+                </select>
               </div>
               <button onClick={() => setIsAddingProfile(true)} className="p-3 bg-slate-50 rounded-full border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors shadow-sm"><Plus className="w-6 h-6" /></button>
             </div>
@@ -439,11 +460,13 @@ const CertiVault = () => {
                 </div>
               </button>
             )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year!] || {}).map(cat => (
-              <button key={cat} onClick={() => setNavPath(p => ({ ...p, category: cat }))} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all text-center">
-                <Folder className="w-14 h-14 text-slate-200" />
-                <div>
-                  <span className="font-black text-slate-800 text-base block">{cat}</span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{academicHierarchy[navPath.year!]?.[cat]?.length || 0} Files</span>
+              <button key={cat} onClick={() => goToCategory(cat)} className="group flex flex-col items-center gap-4 p-6 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all">
+                <Folder className="w-16 h-16 text-slate-400 fill-slate-50 group-hover:scale-110 transition-transform duration-300" />
+                <div className="text-center">
+                  <span className="block text-sm font-black text-slate-800 tracking-tight">{cat}</span>
+                  <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                    {academicHierarchy[navPath.year!]?.[cat]?.length || 0} Files
+                  </span>
                 </div>
               </button>
             )) : (academicHierarchy[navPath.year!]?.[navPath.category!] || []).map(cert => (
