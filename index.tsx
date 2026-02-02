@@ -265,12 +265,8 @@ const CertiVault = () => {
     setProcessStatus('Preparing document...');
     
     try {
-      const apiKey = process.env.API_KEY || (process.env as any).GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("Gemini API key is not configured.");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
+      // Create new instance right before use as per guidelines
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const pureBase64 = base64Data.split(',')[1] || base64Data;
       const initialMimeType = base64Data.match(/^data:([^;]+);base64,/)?.[1] || 'image/jpeg';
 
@@ -349,10 +345,10 @@ const CertiVault = () => {
 
       let extractedData: any = {};
       try {
-        const cleanJson = ocrResponse.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const cleanJson = ocrResponse.text.trim();
         extractedData = JSON.parse(cleanJson);
       } catch (e) {
-        throw new Error("AI parsing failed.");
+        throw new Error("AI parsing failed. Please adjust the document and try again.");
       }
 
       setPendingCert({
@@ -374,7 +370,8 @@ const CertiVault = () => {
       setProcessProgress(100);
       setTimeout(() => setView('editor'), 400);
     } catch (err: any) {
-      setError(`Notice: ${err.message}. Saving original photo.`);
+      console.error(err);
+      setError(`Notice: Advanced AI processing failed. Using original photo quality.`);
       setPendingCert({
         id: Date.now().toString(), 
         image: base64Data, 
@@ -663,7 +660,7 @@ const CertiVault = () => {
                 <div className="text-center font-black text-slate-800 tracking-tight">{ay}</div>
               </button>
             )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year] || {}).map(cat => (
-              <button key={cat} onClick={() => setNavPath({ year: navPath.year, category: cat })} className="group flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all">
+              <button key={cat} onClick={() => goToCategory(cat)} className="group flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all">
                 <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 group-hover:bg-indigo-600 group-hover:text-white transition-all"><Folder className="w-8 h-8" /></div>
                 <div className="text-center font-black text-slate-800 tracking-tight">{cat}</div>
               </button>
@@ -706,7 +703,7 @@ const CertiVault = () => {
            <header className="flex items-center justify-between px-8 py-5 border-b border-slate-100 bg-white sticky top-0 z-[70]">
              <div className="flex items-center gap-5">
                <button onClick={() => setView('dashboard')} className="p-2.5 hover:bg-slate-50 rounded-xl transition-colors"><ChevronLeft className="w-6 h-6" /></button>
-               <div><h2 className="text-2xl font-black text-slate-900 tracking-tight">Verify Scan</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">No AI Watermarks Added</p></div>
+               <div><h2 className="text-2xl font-black text-slate-900 tracking-tight">Verify Scan</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Digital Restoration & Metadata</p></div>
              </div>
              <button onClick={() => { if (pendingCert) { setCertificates(p => [{ ...pendingCert, profileId: activeProfileId, useOriginal: useOriginalPhoto } as Certificate, ...p]); setPendingCert(null); setView('dashboard'); } }} className="hidden sm:flex items-center gap-2 px-8 py-3 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:bg-indigo-600 transition-all active:scale-95"><Check className="w-5 h-5" /> Save Achievement</button>
            </header>
@@ -724,7 +721,7 @@ const CertiVault = () => {
                     <button onClick={handleManualRotate} className="p-4 bg-white/90 backdrop-blur-md text-slate-700 border border-slate-200 rounded-2xl shadow-xl hover:text-indigo-600 transition-all active:scale-95"><RotateCw className="w-5 h-5" /></button>
                   </div>
                 </div>
-                <div className="mt-8 px-6 py-3 bg-white border border-slate-100 rounded-2xl text-[10px] font-black text-slate-400 tracking-widest uppercase flex items-center gap-2"><CheckCircle className="w-4 h-4 text-green-500" /> 100% Factual Integrity Maintained</div>
+                <div className="mt-8 px-6 py-3 bg-white border border-slate-100 rounded-2xl text-[10px] font-black text-slate-400 tracking-widest uppercase flex items-center gap-2"><CheckCircle className="w-4 h-4 text-green-500" /> Secure Scan Verification</div>
              </div>
 
              {/* Right Column: Results Form */}
@@ -811,6 +808,10 @@ const CertiVault = () => {
         if (videoRef.current) videoRef.current.srcObject = stream;
       });
     }).catch(() => setError("Camera access denied."));
+  }
+  
+  function goToCategory(category: string) {
+    setNavPath({ ...navPath, category });
   }
 };
 
