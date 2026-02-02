@@ -35,6 +35,15 @@ const USER_SESSION_KEY = 'certivault_user_session';
 const BASE_CATEGORIES = ['Academics', 'Sports', 'Arts', 'Competitions', 'Workshops', 'Other'];
 const PRIORITY_CATEGORIES = ['Academics', 'Sports', 'Arts'];
 
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  'Academics': 'Recognition for academic excellence, scholarly performance, and high grades.',
+  'Sports': 'Commendation for athletic participation, teamwork, sportsmanship, and physical competition.',
+  'Arts': 'Celebration of creativity, artistic expression, and skill in music, fine arts, or performances.',
+  'Competitions': 'Award for outstanding performance and merit in organized contests and competitive events.',
+  'Workshops': 'Acknowledgment of skill development, participation, and completion of educational seminars.',
+  'Other': 'General recognition for various accomplishments and special activities.'
+};
+
 // --- Types ---
 interface Profile {
   id: string;
@@ -111,7 +120,7 @@ const pdfToImage = async (file: File): Promise<string> => {
 };
 
 const CertiVault = () => {
-  const [user, setUser] = useState<User | null>(() => {
+  const [user] = useState<User>(() => {
     const saved = localStorage.getItem(USER_SESSION_KEY);
     return saved ? JSON.parse(saved) : { name: 'Subhavya Anand', firstName: 'Subhavya', initials: 'SA', email: '' };
   });
@@ -195,21 +204,20 @@ const CertiVault = () => {
           contents: {
             parts: [
               { inlineData: { data: pureBase64, mimeType: 'image/jpeg' } },
-              { text: "Rectify this certificate. Remove the person's fingers, all shadows, and background clutter. Transform it into a clean, flat rectangular scan as if from a scanner. Provide the processed image only." }
+              { text: "Rectify this certificate. Remove the person's fingers, all shadows, and background clutter. Transform it into a clean, flat rectangular scan as if from a scanner. DO NOT ADD ANY WATERMARKS, LOGOS, OR OVERLAY TEXT. Provide the processed image only." }
             ]
           }
         });
         const imagePart = rectificationResponse.candidates?.[0]?.content?.parts.find(p => p.inlineData);
         if (imagePart && imagePart.inlineData) cleanedImage = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
-      } catch (err) { console.warn("Rectification step failed."); }
+      } catch (err) { console.warn("Rectification failed."); }
 
       setProcessStatus('AI: Extracting metadata...');
-      const cleanedPureBase64 = cleanedImage.split(',')[1] || cleanedImage;
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: { 
           parts: [
-            { inlineData: { data: cleanedPureBase64, mimeType: 'image/jpeg' } }, 
+            { inlineData: { data: cleanedImage.split(',')[1], mimeType: 'image/jpeg' } }, 
             { text: `Extract metadata from this certificate. Return ONLY valid JSON. Standardize date to YYYY-MM-DD. 
                      STRICTLY CATEGORIZE into ONE of these: ${categoriesList.join(', ')}. 
                      If no match, use 'Other'.` }
@@ -233,7 +241,7 @@ const CertiVault = () => {
       });
 
       const data = JSON.parse(response.text.trim());
-      const finalCategory = categoriesList.includes(data.category) ? data.category : 'Other';
+      const finalCategory = categoriesList.find(c => c.toLowerCase() === data.category?.toLowerCase()) || 'Other';
 
       setPendingCert({
         id: Date.now().toString(),
@@ -244,7 +252,7 @@ const CertiVault = () => {
       });
       setView('editor');
     } catch (err: any) {
-      setError("AI analysis limited. Manual entry enabled.");
+      setError("AI analysis failed. Manual entry enabled.");
       setPendingCert({
         id: Date.now().toString(), image: base64Data, profileId: activeProfileId,
         studentName: "", title: "New Certificate", issuer: "", date: new Date().toISOString().split('T')[0],
@@ -270,27 +278,65 @@ const CertiVault = () => {
     e.target.value = '';
   };
 
-  const handleShareBatchPDF = async () => {
-    if (selectedIds.size === 0) return;
+  const generatePDFBlob = async (certs: Certificate[]) => {
     const { jsPDF } = (window as any).jspdf;
     const doc = new jsPDF('p', 'mm', 'a4');
-    const certs = certificates.filter(c => selectedIds.has(c.id));
+    const pageWidth = 210;
+    const margin = 20;
+
     for (let i = 0; i < certs.length; i++) {
       if (i > 0) doc.addPage();
       const cert = certs[i];
       const img = new Image();
       img.src = cert.image;
       await new Promise(r => img.onload = r);
-      doc.setFont("helvetica", "bold").setFontSize(18).text(cert.title, 20, 30);
-      doc.addImage(cert.image, 'JPEG', 20, 45, 170, 120);
+
+      doc.setFont("helvetica", "bold").setFontSize(18).text(cert.title, margin, 30);
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100).text(`Issued by: ${cert.issuer}`, margin, 38);
+      
+      // Certificate Image (Cleaned, No Watermark)
+      const imgHeight = 120;
+      doc.addImage(cert.image, 'JPEG', margin, 45, pageWidth - (margin * 2), imgHeight);
+
+      // Category Description Section
+      let y = 45 + imgHeight + 15;
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Achievement Category Details:", margin, y);
+      y += 6;
+      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(80).text(`${cert.category}: ${catDesc}`, margin, y);
+      
+      // Award Reason / Summary Section
+      y += 12;
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Reason for Award / Summary:", margin, y);
+      y += 6;
+      const lines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", pageWidth - (margin * 2));
+      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(60).text(lines, margin, y);
     }
-    doc.save(`CertiVault_Export_${Date.now()}.pdf`);
+    return doc.output('blob');
+  };
+
+  const handleShareBatchPDF = async () => {
+    if (selectedIds.size === 0) return;
+    setIsProcessing(true);
+    setProcessStatus('Compiling PDF...');
+    try {
+      const certs = certificates.filter(c => selectedIds.has(c.id));
+      const blob = await generatePDFBlob(certs);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CertiVault_Export_${Date.now()}.pdf`;
+      a.click();
+    } catch (err) { setError("PDF export failed."); }
+    setIsProcessing(false);
     setIsSelectionMode(false);
     setSelectedIds(new Set());
   };
 
   const filteredCerts = useMemo(() => {
     let res = certificates.filter(c => c.profileId === activeProfileId);
+    
+    // Typed Search logic
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       res = res.filter(c => 
@@ -300,12 +346,15 @@ const CertiVault = () => {
         getAcademicYear(c.date).toLowerCase().includes(q)
       );
     }
+    
+    // Tag Filter logic
     if (selectedFilterTags.length > 0) {
       res = res.filter(c => 
-        selectedFilterTags.includes(c.category) || 
-        selectedFilterTags.includes(getAcademicYear(c.date))
+        selectedFilterTags.some(tag => tag.toLowerCase() === c.category.toLowerCase()) || 
+        selectedFilterTags.some(tag => tag.toLowerCase() === getAcademicYear(c.date).toLowerCase())
       );
     }
+    
     return res;
   }, [certificates, activeProfileId, searchQuery, selectedFilterTags]);
 
@@ -362,16 +411,12 @@ const CertiVault = () => {
               <h1 className="text-2xl font-black tracking-tight text-slate-900">CertiVault</h1>
             </div>
             <div className="flex items-center gap-2">
-              <div className="bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100 flex items-center gap-2 shadow-sm">
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-black uppercase">
-                    {profiles.find(p => p.id === activeProfileId)?.name[0] || 'A'}
-                  </div>
-                  <select value={activeProfileId} onChange={(e) => { setActiveProfileId(e.target.value); setNavPath({}); }} className="bg-transparent font-bold text-slate-700 outline-none text-xs pr-1">
-                    {profiles.length === 0 ? <option value="">No Profile</option> : profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                  <ChevronDown className="w-3 h-3 text-slate-400" />
+              <div className="bg-slate-50 px-8 py-3 rounded-full border border-slate-100 flex items-center shadow-sm transition-all">
+                  <span className="font-black text-slate-800 text-lg tracking-tight leading-none">
+                    {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
+                  </span>
               </div>
-              <button onClick={() => setIsAddingProfile(true)} className="p-2 bg-slate-50 rounded-full border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors"><Plus className="w-5 h-5" /></button>
+              <button onClick={() => setIsAddingProfile(true)} className="p-3 bg-slate-50 rounded-full border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors shadow-sm"><Plus className="w-6 h-6" /></button>
             </div>
           </header>
 
@@ -447,12 +492,6 @@ const CertiVault = () => {
                 {isSelectionMode && <div className="absolute top-3 right-3">{selectedIds.has(cert.id) ? <CheckCircle className="w-6 h-6 text-indigo-600 fill-white shadow-sm" /> : <div className="w-6 h-6 border-2 border-slate-200 rounded-full bg-white/60" />}</div>}
               </div>
             ))}
-            {hasActiveFilters && filteredCerts.length === 0 && (
-              <div className="col-span-full py-20 text-center text-slate-400">
-                <Search className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                <p className="font-black text-sm uppercase tracking-widest">No matching records found</p>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -544,7 +583,19 @@ const CertiVault = () => {
           <div className="flex justify-between items-center mb-8">
             <button onClick={() => setView('dashboard')} className="p-3 bg-slate-50 rounded-2xl"><ChevronLeft className="w-6 h-6" /></button>
             <div className="flex gap-4">
-               <button onClick={() => { setSelectedIds(new Set([selectedCert.id])); handleShareBatchPDF(); }} className="text-indigo-600 font-black text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-xl"><Share2 className="w-4 h-4" /> Share PDF</button>
+               <button onClick={async () => {
+                 setIsProcessing(true);
+                 setProcessStatus('Preparing PDF...');
+                 try {
+                   const blob = await generatePDFBlob([selectedCert]);
+                   const url = URL.createObjectURL(blob);
+                   const a = document.createElement('a');
+                   a.href = url;
+                   a.download = `${selectedCert.title.replace(/\s+/g, '_')}.pdf`;
+                   a.click();
+                 } catch(e) { setError("PDF generation failed."); }
+                 setIsProcessing(false);
+               }} className="text-indigo-600 font-black text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-xl"><Share2 className="w-4 h-4" /> Share PDF</button>
                <button onClick={() => { if(confirm("Permanently delete this?")) { setCertificates(p => p.filter(c => c.id !== selectedCert.id)); setView('dashboard'); } }} className="text-red-500 font-black text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 bg-red-50 rounded-xl"><Trash2 className="w-4 h-4" /> Delete</button>
             </div>
           </div>
@@ -566,7 +617,7 @@ const CertiVault = () => {
               <div>Vault Path: <span className="text-indigo-600 block mt-2 text-sm font-mono truncate">ROOT/{getAcademicYear(selectedCert.date)}/{selectedCert.category}</span></div>
             </div>
             <div className="p-8 bg-slate-50 rounded-[2.5rem] text-base italic text-slate-600 leading-relaxed border border-slate-100 shadow-inner">
-              "{selectedCert.summary || "No description."}"
+              "{selectedCert.summary || "No description provided."}"
             </div>
           </div>
         </div>
