@@ -290,15 +290,14 @@ const CertiVault = () => {
       img.src = cert.image;
       await new Promise(r => img.onload = r);
 
-      // 1. Header Information (Moved higher for more image space)
-      doc.setFont("helvetica", "bold").setFontSize(16).setTextColor(30, 41, 59).text(cert.title, margin, 20);
-      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(100, 116, 139).text(`Issued by: ${cert.issuer}`, margin, 26);
+      // 1. Header Information (Top Left)
+      doc.setFont("helvetica", "bold").setFontSize(18).setTextColor(30, 41, 59).text(cert.title, margin, 25);
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100, 116, 139).text(`Issued by: ${cert.issuer}`, margin, 32);
       
-      // 2. Maximum Image Placement (Aiming for A4 size impact)
-      // Available height from header to bottom summary section
-      // Leave about 50mm at bottom for metadata and description
-      const maxImgHeight = 200; 
-      const startY = 32;
+      // 2. Main Image Section
+      // We want the image to be large, centered, and proportional.
+      const startY = 42;
+      const maxImgHeight = 160; 
 
       let finalWidth = contentWidth;
       let finalHeight = (img.naturalHeight * finalWidth) / img.naturalWidth;
@@ -308,36 +307,39 @@ const CertiVault = () => {
         finalWidth = (img.naturalWidth * finalHeight) / img.naturalHeight;
       }
       
-      // Center image horizontally within content area
+      // Horizontal Center
       const xOffset = margin + (contentWidth - finalWidth) / 2;
       doc.addImage(cert.image, 'JPEG', xOffset, startY, finalWidth, finalHeight);
 
-      // 3. Achievement Details Section (Positioned dynamically relative to image)
-      let yPosition = startY + finalHeight + 12;
+      // 3. Metadata and Description Section
+      let yPosition = startY + finalHeight + 18;
       
-      // Ensure we don't bleed off the page
-      if (yPosition > pageHeight - 30) {
-        // Fallback if image is somehow massive - shouldn't happen with maxImgHeight
-        yPosition = pageHeight - 40;
-      }
-
+      // Safety check: if image is too tall, move content to bottom or wrap.
+      // Given maxImgHeight=160, startY=42, yPos will be around 220mm. A4 is 297mm. plenty of room.
+      
+      // Horizontal Divider (Matches sample style)
       doc.setDrawColor(241, 245, 249);
-      doc.line(margin, yPosition - 5, pageWidth - margin, yPosition - 5);
+      doc.setLineWidth(0.5);
+      doc.line(margin, yPosition - 8, pageWidth - margin, yPosition - 8);
 
-      doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(51, 65, 85).text("Achievement Category Details:", margin, yPosition);
-      yPosition += 5;
-      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
-      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(71, 85, 105).text(`${cert.category}: ${catDesc}`, margin, yPosition);
+      // Achievement Category Details
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Achievement Category Details:", margin, yPosition);
+      yPosition += 6;
+      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Achievement recognition for outstanding performance.";
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(71, 85, 105).text(`${cert.category}: ${catDesc}`, margin, yPosition);
       
-      yPosition += 10;
-      doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(51, 65, 85).text("Reason for Award / Summary:", margin, yPosition);
-      yPosition += 5;
+      yPosition += 14;
       
-      const summaryLines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", contentWidth);
-      doc.setFont("helvetica", "italic").setFontSize(9).setTextColor(100, 116, 139).text(summaryLines, margin, yPosition);
+      // Reason for Award / Summary
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Reason for Award / Summary:", margin, yPosition);
+      yPosition += 6;
+      
+      const summaryText = cert.summary || `This certificate acknowledges the outstanding accomplishments and participation of the recipient. Vaulted on ${new Date(cert.createdAt).toLocaleDateString()}.`;
+      const summaryLines = doc.splitTextToSize(summaryText, contentWidth);
+      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(100, 116, 139).text(summaryLines, margin, yPosition);
 
-      // Footer
-      doc.setFontSize(7).setTextColor(203, 213, 225).text(`Vaulted with CertiVault • ${new Date().toLocaleDateString()}`, margin, pageHeight - 10);
+      // 4. Branding Footer
+      doc.setFontSize(8).setTextColor(203, 213, 225).text(`Vaulted with CertiVault • ${new Date().toLocaleDateString()}`, margin, pageHeight - 12);
     }
     return doc.output('blob');
   };
@@ -409,7 +411,7 @@ const CertiVault = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CertiVault_Export_${Date.now()}.pdf`;
+      a.download = `CertiVault_Report_${Date.now()}.pdf`;
       a.click();
       setIsSelectionMode(false);
       setSelectedIds(new Set());
@@ -534,7 +536,7 @@ const CertiVault = () => {
                 <div className="relative"><Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" /></div>
                 <div>
                   <span className="font-black text-slate-800 text-base block">{ay}</span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).flat().length} Records</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).reduce((acc: number, curr: Certificate[]) => acc + (curr?.length || 0), 0)} Items</span>
                 </div>
               </button>
             )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year!] || {}).map(cat => (
