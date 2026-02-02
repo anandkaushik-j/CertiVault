@@ -9,23 +9,20 @@ import {
   Loader2, 
   Share2, 
   Upload, 
-  User as UserIcon, 
-  Folder, 
-  Calendar, 
   X, 
   Check, 
   CheckCircle,
   ChevronRight as ChevronRightIcon,
   Home,
   CheckSquare,
-  Square,
   Search,
   Eraser,
   Plus,
   AlertCircle,
-  ImageIcon,
   Sparkles,
-  ChevronDown
+  ChevronDown,
+  // Added Folder icon to fix "Cannot find name 'Folder'" errors
+  Folder
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -64,13 +61,6 @@ interface Certificate {
   createdAt: number;
 }
 
-interface User {
-  name: string;
-  firstName: string;
-  initials: string;
-  email: string;
-}
-
 // --- Helper Functions ---
 const getAcademicYear = (dateStr: string) => {
   if (!dateStr) return "Unknown Year";
@@ -78,7 +68,6 @@ const getAcademicYear = (dateStr: string) => {
   if (isNaN(date.getTime())) return "Unknown Year";
   const year = date.getFullYear();
   const month = date.getMonth(); 
-  // Academic cycle: April/May to March
   return (month >= 3) ? `${year}-${year + 1}` : `${year - 1}-${year}`;
 };
 
@@ -318,24 +307,6 @@ const CertiVault = () => {
     return doc.output('blob');
   };
 
-  const handleShareBatchPDF = async () => {
-    if (selectedIds.size === 0) return;
-    setIsProcessing(true);
-    setProcessStatus('Compiling PDF...');
-    try {
-      const certs = certificates.filter(c => selectedIds.has(c.id));
-      const blob = await generatePDFBlob(certs);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `CertiVault_Export_${Date.now()}.pdf`;
-      a.click();
-    } catch (err) { setError("PDF export failed."); }
-    setIsProcessing(false);
-    setIsSelectionMode(false);
-    setSelectedIds(new Set());
-  };
-
   const filteredCerts = useMemo(() => {
     let res = certificates.filter(c => c.profileId === activeProfileId);
     if (searchQuery.trim()) {
@@ -380,6 +351,17 @@ const CertiVault = () => {
     setSelectedFilterTags(prev => 
       prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
     );
+  };
+
+  const capturePhoto = async () => {
+    if (!videoRef.current) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth; canvas.height = videoRef.current.videoHeight;
+    canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
+    const b = canvas.toDataURL('image/jpeg', 0.85);
+    stopCamera(); 
+    setView('dashboard'); 
+    await processCertificate(await resizeImage(b));
   };
 
   return (
@@ -450,7 +432,7 @@ const CertiVault = () => {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-6">
             {!navPath.year ? sortedYears.map(ay => (
               <button key={ay} onClick={() => setNavPath({ year: ay })} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all text-center">
-                <Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" />
+                <div className="relative"><Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" /></div>
                 <div>
                   <span className="font-black text-slate-800 text-base block">{ay}</span>
                   <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).flat().length} Records</span>
@@ -485,25 +467,16 @@ const CertiVault = () => {
             <ChevronLeft className="w-6 h-6" />
           </button>
 
-          <div className="absolute bottom-10 left-0 right-0 flex justify-center items-center z-[110]">
+          <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center z-[110]">
             <button 
-              onClick={async () => {
-                if (!videoRef.current) return;
-                const canvas = document.createElement('canvas');
-                canvas.width = videoRef.current.videoWidth; canvas.height = videoRef.current.videoHeight;
-                canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
-                const b = canvas.toDataURL('image/jpeg', 0.85);
-                stopCamera(); setView('dashboard'); await processCertificate(await resizeImage(b));
-              }} 
-              className="w-24 h-24 rounded-full border-4 border-white/40 p-1.5 active:scale-95 transition-transform bg-transparent"
+              onClick={capturePhoto} 
+              className="w-24 h-24 rounded-full border-[6px] border-white/30 p-1.5 active:scale-95 transition-transform bg-transparent flex items-center justify-center"
             >
-              <div className="w-full h-full bg-white rounded-full shadow-2xl flex items-center justify-center">
-                <div className="w-16 h-16 rounded-full border-2 border-slate-200" />
-              </div>
+              <div className="w-full h-full bg-white rounded-full shadow-2xl" />
             </button>
           </div>
           
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-80 border-2 border-white/20 rounded-2xl pointer-events-none">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 h-96 border-2 border-white/20 rounded-2xl pointer-events-none">
             <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-white rounded-tl-xl" />
             <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-white rounded-tr-xl" />
             <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white rounded-bl-xl" />
@@ -514,19 +487,19 @@ const CertiVault = () => {
 
       {view === 'editor' && pendingCert && (
         <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in slide-in-from-bottom duration-500 overflow-hidden">
-          <header className="p-6 pt-8 flex justify-between items-center bg-white z-[160] border-b border-slate-50">
+          <header className="p-6 pt-8 flex justify-between items-center bg-white z-[160] border-b border-slate-100">
             <button onClick={() => setView('dashboard')} className="p-3 bg-slate-50 rounded-2xl text-slate-600"><ChevronLeft className="w-6 h-6" /></button>
             <h2 className="text-xl font-black tracking-tight text-slate-900 flex items-center gap-2"><Sparkles className="w-5 h-5 text-indigo-600" /> Verify Achievement</h2>
             <button onClick={() => { 
                 if(!pendingCert.title) return setError("Title required.");
                 setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); 
                 setView('dashboard'); 
-              }} className="text-indigo-600 font-black px-4 uppercase text-sm tracking-widest">Save</button>
+              }} className="text-indigo-600 font-black px-4 uppercase text-sm tracking-widest">SAVE</button>
           </header>
           
           <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-40">
             <div className="aspect-[1.414/1] w-full bg-slate-50 rounded-[2.5rem] flex items-center justify-center p-6 border border-slate-100 shadow-sm mx-auto max-w-lg">
-               <img src={pendingCert.image} className="max-h-full object-contain rounded-lg" />
+               <img src={pendingCert.image} className="max-h-full object-contain rounded-lg shadow-sm" />
             </div>
 
             <div className="space-y-6 max-w-lg mx-auto">
@@ -535,11 +508,11 @@ const CertiVault = () => {
                 <input type="text" value={pendingCert.issuer} onChange={e => setPendingCert({...pendingCert, issuer: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <div className="flex justify-between items-center px-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Category</label>
-                    <button onClick={() => setIsAddingCustomCategory(true)} className="text-[10px] text-indigo-600 font-black uppercase tracking-widest">+ Custom</button>
+                    <button onClick={() => setIsAddingCustomCategory(true)} className="text-[10px] text-indigo-600 font-black uppercase tracking-widest">+ CUSTOM</button>
                   </div>
                   {isAddingCustomCategory ? (
                     <div className="flex gap-2">
@@ -560,7 +533,7 @@ const CertiVault = () => {
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Award Date</label>
-                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none text-slate-800" style={{ minWidth: '100%' }} />
+                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none text-slate-800 w-full" />
                 </div>
               </div>
 
@@ -576,12 +549,12 @@ const CertiVault = () => {
             </div>
           </div>
           
-          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white/80 backdrop-blur-xl border-t border-slate-100 z-[170]">
+          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 z-[170]">
             <button 
               onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); setView('dashboard'); }} 
               className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl shadow-indigo-100 uppercase tracking-widest text-sm hover:bg-indigo-700 transition-colors active:scale-95"
             >
-              Vault Achievement
+              VAULT ACHIEVEMENT
             </button>
           </div>
         </div>
