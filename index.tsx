@@ -21,13 +21,13 @@ import {
   AlertCircle,
   Sparkles,
   ChevronDown,
-  Folder
+  Folder,
+  Square
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 
 // --- Configuration & Constants ---
 const STORAGE_KEY = 'certivault_pro_v18_final_fix'; 
-const USER_SESSION_KEY = 'certivault_user_session';
 const BASE_CATEGORIES = ['Academics', 'Sports', 'Arts', 'Competitions', 'Workshops', 'Other'];
 const PRIORITY_CATEGORIES = ['Academics', 'Sports', 'Arts'];
 
@@ -113,7 +113,6 @@ const CertiVault = () => {
   const [view, setView] = useState<'dashboard' | 'scanner' | 'editor' | 'detail'>('dashboard');
   const [navPath, setNavPath] = useState<{year?: string, category?: string}>({});
   
-  // Define goToCategory helper to fix the "Cannot find name 'goToCategory'" error
   const goToCategory = (category: string) => setNavPath(prev => ({ ...prev, category }));
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -367,6 +366,35 @@ const CertiVault = () => {
     await processCertificate(await resizeImage(b));
   };
 
+  const handleBatchShare = async () => {
+    if (selectedIds.size === 0) return;
+    setIsProcessing(true);
+    setProcessStatus('Generating shared PDF...');
+    try {
+      const selectedCerts = certificates.filter(c => selectedIds.has(c.id));
+      const blob = await generatePDFBlob(selectedCerts);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CertiVault_Export_${Date.now()}.pdf`;
+      a.click();
+      setIsSelectionMode(false);
+      setSelectedIds(new Set());
+    } catch (err) {
+      setError("Export failed.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const toggleSelect = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  };
+
   return (
     <div className="min-h-screen bg-white font-sans text-slate-900 select-none overflow-x-hidden">
       {isProcessing && (
@@ -384,35 +412,32 @@ const CertiVault = () => {
       )}
 
       {view === 'dashboard' && (
-        <div className="max-w-4xl mx-auto p-4 md:p-8 animate-in fade-in">
+        <div className="max-w-4xl mx-auto p-4 md:p-8 animate-in fade-in pb-32">
           <header className="flex justify-between items-center mb-10">
             <div className="flex items-center gap-2">
               <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-lg"><FileText className="w-6 h-6" /></div>
               <h1 className="text-2xl font-black tracking-tight text-slate-900">CertiVault</h1>
             </div>
             <div className="flex items-center gap-2">
-              <div className="relative group">
-                <div className="bg-slate-50 px-6 py-3 rounded-full border border-slate-100 flex items-center gap-2 shadow-sm transition-all hover:bg-slate-100 cursor-pointer">
-                    <span className="font-black text-slate-800 text-lg tracking-tight leading-none">
-                      {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
-                    </span>
-                    <ChevronDown className="w-4 h-4 text-slate-400" />
-                </div>
-                {/* Invisible select to handle native picker or a simple custom list */}
-                <select 
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full"
-                  value={activeProfileId}
-                  onChange={(e) => {
-                    setActiveProfileId(e.target.value);
-                    setNavPath({});
-                  }}
-                >
-                  {profiles.length > 0 ? (
-                    profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)
-                  ) : (
-                    <option value="">No profiles</option>
-                  )}
-                </select>
+              <div className="relative group bg-slate-50 px-6 py-3 rounded-full border border-slate-100 flex items-center shadow-sm transition-all hover:bg-white hover:border-indigo-100 cursor-pointer">
+                  <select 
+                    value={activeProfileId}
+                    onChange={(e) => {
+                      setActiveProfileId(e.target.value);
+                      setNavPath({});
+                      setIsSelectionMode(false);
+                      setSelectedIds(new Set());
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  >
+                    {profiles.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <span className="font-black text-slate-800 text-lg tracking-tight leading-none mr-2">
+                    {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
+                  </span>
+                  <ChevronDown className="w-4 h-4 text-slate-400" />
               </div>
               <button onClick={() => setIsAddingProfile(true)} className="p-3 bg-slate-50 rounded-full border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors shadow-sm"><Plus className="w-6 h-6" /></button>
             </div>
@@ -440,13 +465,33 @@ const CertiVault = () => {
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*,application/pdf" className="hidden" />
           </div>
 
-          <div className="flex justify-between items-center mb-6 px-1">
-            <div className="flex items-center gap-2 text-sm font-black text-indigo-600 uppercase tracking-tight">
-              <button onClick={() => {setNavPath({}); setSearchQuery(''); setSelectedFilterTags([]);}} className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 px-1">
+            <div className="flex items-center gap-2 text-sm font-black text-indigo-600 uppercase tracking-tight overflow-x-auto no-scrollbar max-w-full">
+              <button onClick={() => {setNavPath({}); setSearchQuery(''); setSelectedFilterTags([]);}} className="flex items-center gap-2 whitespace-nowrap">
                 <Home className="w-4 h-4" /> ROOT
               </button>
-              {navPath.year && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><button onClick={() => setNavPath({ year: navPath.year })} className="hover:text-indigo-800">{navPath.year}</button></>}
-              {navPath.category && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><span>{navPath.category}</span></>}
+              {navPath.year && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><button onClick={() => setNavPath({ year: navPath.year })} className="hover:text-indigo-800 whitespace-nowrap">{navPath.year}</button></>}
+              {navPath.category && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><span className="whitespace-nowrap">{navPath.category}</span></>}
+            </div>
+            
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {!isSelectionMode ? (
+                <button 
+                  onClick={() => setIsSelectionMode(true)} 
+                  className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all w-full sm:w-auto justify-center"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Select Multiple
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                   <button 
+                    onClick={() => { setIsSelectionMode(false); setSelectedIds(new Set()); }} 
+                    className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest text-center"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -470,12 +515,51 @@ const CertiVault = () => {
                 </div>
               </button>
             )) : (academicHierarchy[navPath.year!]?.[navPath.category!] || []).map(cert => (
-              <div key={cert.id} onClick={() => { setSelectedCert(cert); setView('detail'); }} className="bg-white rounded-3xl border overflow-hidden relative transition-all border-slate-100 shadow-sm hover:shadow-md cursor-pointer">
-                <div className="aspect-[1.414/1] bg-slate-50 p-2 flex items-center justify-center"><img src={cert.image} className="max-h-full object-contain" /></div>
-                <div className="p-4"><h3 className="text-sm font-black truncate text-slate-800">{cert.title}</h3><p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1 truncate">{cert.issuer}</p></div>
+              <div 
+                key={cert.id} 
+                onClick={() => { 
+                  if (isSelectionMode) toggleSelect(cert.id);
+                  else { setSelectedCert(cert); setView('detail'); }
+                }} 
+                className={`bg-white rounded-3xl border overflow-hidden relative transition-all border-slate-100 shadow-sm hover:shadow-md cursor-pointer ${isSelectionMode && selectedIds.has(cert.id) ? 'ring-2 ring-indigo-600' : ''}`}
+              >
+                {isSelectionMode && (
+                  <div className="absolute top-3 left-3 z-10 p-1 bg-white/80 backdrop-blur-sm rounded-lg shadow-sm">
+                    {selectedIds.has(cert.id) ? (
+                      <CheckSquare className="w-6 h-6 text-indigo-600 fill-white" />
+                    ) : (
+                      <Square className="w-6 h-6 text-slate-300" />
+                    )}
+                  </div>
+                )}
+                <div className="aspect-[1.414/1] bg-slate-50 p-2 flex items-center justify-center">
+                  <img src={cert.image} className="max-h-full object-contain" />
+                </div>
+                <div className="p-4">
+                  <h3 className="text-sm font-black truncate text-slate-800">{cert.title}</h3>
+                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1 truncate">{cert.issuer}</p>
+                </div>
               </div>
             ))}
           </div>
+
+          {/* Floating Action Bar for Selection Mode */}
+          {isSelectionMode && selectedIds.size > 0 && (
+            <div className="fixed bottom-8 left-1/2 -translate-x-1/2 w-full max-w-sm px-4 z-[180] animate-in slide-in-from-bottom-8">
+              <div className="bg-slate-900 text-white rounded-[2rem] p-4 shadow-2xl flex items-center justify-between gap-4 border border-white/10">
+                <div className="pl-4">
+                  <span className="text-xs font-black uppercase tracking-widest text-indigo-400 block">{selectedIds.size} Selected</span>
+                  <span className="text-[10px] font-bold text-slate-400">Ready to export</span>
+                </div>
+                <button 
+                  onClick={handleBatchShare}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-2 transition-all active:scale-95"
+                >
+                  <Share2 className="w-4 h-4" /> Share PDF
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
