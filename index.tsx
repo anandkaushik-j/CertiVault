@@ -24,14 +24,22 @@ import {
   Folder,
   Square,
   RotateCcw,
-  RotateCw
+  RotateCw,
+  Cloud,
+  LogOut,
+  User as UserIcon,
+  CloudUpload,
+  ExternalLink,
+  Settings
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 
-// --- Configuration & Constants ---
+// --- Configuration ---
+// Ensure this ID is configured as a "Web application" in Google Cloud Console
+// with the correct "Authorized JavaScript origins" whitelisted.
+const GOOGLE_CLIENT_ID = "257110771108-9u5pelqmi4krcsomp6buor1pvlqijerb.apps.googleusercontent.com";
 const STORAGE_KEY = 'certivault_pro_v18_final_fix'; 
 const BASE_CATEGORIES = ['Academics', 'Sports', 'Arts', 'Competitions', 'Workshops', 'Other'];
-const PRIORITY_CATEGORIES = ['Academics', 'Sports', 'Arts'];
 
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   'Academics': 'Recognition for academic excellence, scholarly performance, and high grades.',
@@ -51,7 +59,6 @@ interface Profile {
 interface Certificate {
   id: string;
   image: string; 
-  originalImage?: string; 
   profileId: string;
   studentName: string; 
   title: string;
@@ -60,6 +67,13 @@ interface Certificate {
   category: string;
   summary: string; 
   createdAt: number;
+  synced?: boolean;
+}
+
+interface GoogleUser {
+  name: string;
+  email: string;
+  picture: string;
 }
 
 // --- Helper Functions ---
@@ -101,17 +115,13 @@ const rotateImage = (base64: string, degrees: number): Promise<string> => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return resolve(base64);
-      
       const angle = (degrees * Math.PI) / 180;
       const is90Step = degrees % 180 !== 0;
-      
       canvas.width = is90Step ? img.height : img.width;
       canvas.height = is90Step ? img.width : img.height;
-      
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate(angle);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      
       resolve(canvas.toDataURL('image/jpeg', 0.9));
     };
   });
@@ -119,7 +129,7 @@ const rotateImage = (base64: string, degrees: number): Promise<string> => {
 
 const pdfToImage = async (file: File): Promise<string> => {
   const pdfjsLib = (window as any).pdfjsLib;
-  if (!pdfjsLib) throw new Error("PDF Library Missing from index.html");
+  if (!pdfjsLib) throw new Error("PDF Library Missing");
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -127,7 +137,6 @@ const pdfToImage = async (file: File): Promise<string> => {
   const viewport = page.getViewport({ scale: 2.0 }); 
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
-  if (!context) throw new Error("Canvas context failed");
   canvas.height = viewport.height; canvas.width = viewport.width;
   await page.render({ canvasContext: context, viewport }).promise;
   return canvas.toDataURL('image/jpeg', 0.85);
@@ -139,10 +148,6 @@ const CertiVault = () => {
   const [view, setView] = useState<'dashboard' | 'scanner' | 'editor' | 'detail'>('dashboard');
   const [navPath, setNavPath] = useState<{year?: string, category?: string}>({});
   
-  const goToCategory = (category: string) => setNavPath(prev => ({ ...prev, category }));
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
   const [selectedCert, setSelectedCert] = useState<Certificate | null>(null);
@@ -158,6 +163,11 @@ const CertiVault = () => {
   const [isAddingProfile, setIsAddingProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
 
+  // Google Integration State
+  const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [showConfigHelp, setShowConfigHelp] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -170,10 +180,8 @@ const CertiVault = () => {
     if (saved) {
       try {
         const data = JSON.parse(saved);
-        if (data.profiles?.length > 0) {
-          setProfiles(data.profiles);
-          if (data.activeProfileId) setActiveProfileId(data.activeProfileId);
-        }
+        if (data.profiles) setProfiles(data.profiles);
+        if (data.activeProfileId) setActiveProfileId(data.activeProfileId);
         if (data.certificates) setCertificates(data.certificates);
         if (data.customCategories) setCustomCategories(data.customCategories);
       } catch (e) { console.error(e); }
@@ -184,12 +192,203 @@ const CertiVault = () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ profiles, certificates, activeProfileId, customCategories }));
   }, [profiles, certificates, activeProfileId, customCategories]);
 
-  const startCamera = async () => {
-    if (!activeProfileId) {
-      setError("Please create a profile first to start scanning achievements.");
-      setIsAddingProfile(true);
-      return;
+  // --- Google Integration Logic ---
+  const handleGoogleLogin = () => {
+    try {
+      if (!(window as any).google) {
+        setError("Google SDK not loaded. Please check your internet connection.");
+        return;
+      }
+
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+        callback: (tokenResponse: any) => {
+          if (tokenResponse.error) {
+            console.error("Auth Error:", tokenResponse);
+            setError(`Authentication Error: ${tokenResponse.error_description || tokenResponse.error}`);
+            setShowConfigHelp(true);
+            return;
+          }
+          if (tokenResponse.access_token) {
+            setAccessToken(tokenResponse.access_token);
+            fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+            })
+            .then(res => res.json())
+            .then(data => {
+              setGoogleUser({ name: data.name, email: data.email, picture: data.picture });
+              setError(null);
+              setShowConfigHelp(false);
+            })
+            .catch(() => setError("Failed to retrieve user profile."));
+          }
+        },
+      });
+      client.requestAccessToken();
+    } catch (err: any) {
+      setError("Initialization Error. Ensure your Client ID and Domain are correctly configured.");
+      setShowConfigHelp(true);
     }
+  };
+
+  const driveApi = async (endpoint: string, options: RequestInit = {}) => {
+    if (!accessToken) throw new Error("Not signed in");
+    const response = await fetch(`https://www.googleapis.com/drive/v3/${endpoint}`, {
+      ...options,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${accessToken}`,
+      }
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || "Drive API failed");
+    }
+    return response.json();
+  };
+
+  const findOrCreateFolder = async (name: string, parentId?: string) => {
+    const query = `name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false ${parentId ? `and '${parentId}' in parents` : ""}`;
+    const list = await driveApi(`files?q=${encodeURIComponent(query)}&fields=files(id)`);
+    if (list.files && list.files.length > 0) return list.files[0].id;
+
+    const folder = await driveApi('files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: parentId ? [parentId] : []
+      })
+    });
+    return folder.id;
+  };
+
+  const uploadFileToDrive = async (cert: Certificate, folderId: string, pdfBlob: Blob) => {
+    const metadata = {
+      name: `${cert.title.replace(/\s+/g, '_')}.pdf`,
+      parents: [folderId],
+    };
+
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', pdfBlob);
+
+    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form
+    });
+    
+    if (!response.ok) throw new Error("Upload failed");
+    return response.json();
+  };
+
+  const syncToDrive = async () => {
+    if (!accessToken) return handleGoogleLogin();
+    const profile = profiles.find(p => p.id === activeProfileId);
+    if (!profile) return setError("No active profile selected.");
+
+    setIsProcessing(true);
+    setProcessStatus("Mirroring Vault to Cloud...");
+    try {
+      const rootId = await findOrCreateFolder("CertiVault");
+      const profileId = await findOrCreateFolder(profile.name, rootId);
+
+      const profileCerts = certificates.filter(c => c.profileId === activeProfileId && !c.synced);
+      if (profileCerts.length === 0) {
+        setProcessStatus("Vault already in sync!");
+        await new Promise(r => setTimeout(r, 1000));
+        return;
+      }
+
+      for (const cert of profileCerts) {
+        setProcessStatus(`Vaulting: ${cert.title}...`);
+        const year = getAcademicYear(cert.date);
+        const yearId = await findOrCreateFolder(year, profileId);
+        const catId = await findOrCreateFolder(cert.category, yearId);
+        
+        const blob = await generatePDFBlob([cert]);
+        await uploadFileToDrive(cert, catId, blob);
+        
+        setCertificates(prev => prev.map(c => c.id === cert.id ? { ...c, synced: true } : c));
+      }
+      setProcessStatus("Sync Successful!");
+      await new Promise(r => setTimeout(r, 1500));
+    } catch (err: any) {
+      setError(`Sync failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // --- Document Logic (Professional Academic PDF) ---
+  const generatePDFBlob = async (certs: Certificate[]) => {
+    const { jsPDF } = (window as any).jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = 210, pageHeight = 297, margin = 20;
+    const contentWidth = pageWidth - (margin * 2);
+
+    for (let i = 0; i < certs.length; i++) {
+      if (i > 0) doc.addPage();
+      const cert = certs[i];
+      
+      const img = new Image();
+      img.src = cert.image;
+      await new Promise((resolve) => {
+        img.onload = resolve;
+        img.onerror = () => { console.error("Img Load Failed"); resolve(null); };
+      });
+
+      // Header: Academic Report Header
+      doc.setFillColor(248, 250, 252);
+      doc.rect(0, 0, pageWidth, 40, 'F');
+      
+      doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(15, 23, 42).text(cert.title, margin, 20);
+      doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(71, 85, 105).text(`OFFICIAL REPOSITORY RECORD • ISSUED BY: ${cert.issuer.toUpperCase()}`, margin, 28);
+      
+      // Document Display
+      const startY = 50;
+      const maxImgH = 150; 
+      let fW = contentWidth;
+      let fH = (img.naturalHeight * fW) / img.naturalWidth;
+      
+      if (fH > maxImgH) {
+        fH = maxImgH;
+        fW = (img.naturalWidth * fH) / img.naturalHeight;
+      }
+      
+      const xOffset = margin + (contentWidth - fW) / 2;
+      
+      // Shadow Effect for document
+      doc.setFillColor(241, 245, 249);
+      doc.rect(xOffset + 1, startY + 1, fW, fH, 'F');
+      doc.addImage(cert.image, 'JPEG', xOffset, startY, fW, fH);
+
+      // Metadata Section
+      let y = startY + fH + 18;
+      doc.setDrawColor(226, 232, 240).setLineWidth(0.4).line(margin, y - 10, pageWidth - margin, y - 10);
+      
+      doc.setFont("helvetica", "bold").setFontSize(12).setTextColor(15, 23, 42).text("ACHIEVEMENT CLASSIFICATION", margin, y);
+      y += 6;
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(71, 85, 105).text(`${cert.category}: ${CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition."}`, margin, y);
+      
+      y += 14;
+      doc.setFont("helvetica", "bold").setFontSize(12).setTextColor(15, 23, 42).text("EXECUTIVE SUMMARY", margin, y);
+      y += 6;
+      const lines = doc.splitTextToSize(cert.summary || "This record acknowledges the successful participation and achievements of the recipient as documented in the attached scan.", contentWidth);
+      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(71, 85, 105).text(lines, margin, y);
+
+      // Footer
+      doc.setDrawColor(241, 245, 249).line(margin, pageHeight - 20, pageWidth - margin, pageHeight - 20);
+      doc.setFontSize(8).setFont("helvetica", "normal").setTextColor(148, 163, 184).text(`Vaulted via CertiVault Pro • Secure Digital Repository • ${new Date().toLocaleDateString()}`, margin, pageHeight - 12);
+      doc.text(`Page ${i + 1} of ${certs.length}`, pageWidth - margin - 15, pageHeight - 12);
+    }
+    return doc.output('blob');
+  };
+
+  const startCamera = async () => {
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -197,615 +396,391 @@ const CertiVault = () => {
       });
       setView('scanner');
       setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
-    } catch (err) { setError("Camera access denied."); }
+    } catch (err) { setError("Camera access denied. Please verify your browser permissions."); }
   };
 
   const stopCamera = () => {
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach(track => track.stop());
       videoRef.current.srcObject = null;
     }
-  };
-
-  const processCertificate = async (base64Data: string) => {
-    setIsProcessing(true);
-    setProcessStatus('AI: Rectifying scan...');
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const pureBase64 = base64Data.split(',')[1] || base64Data;
-      
-      let cleanedImage = base64Data;
-      try {
-        const rectificationResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: {
-            parts: [
-              { inlineData: { data: pureBase64, mimeType: 'image/jpeg' } },
-              { text: "Rectify this certificate. Remove the person's fingers, all shadows, and background clutter. Transform it into a clean, flat rectangular scan as if from a scanner. DO NOT ADD ANY WATERMARKS, LOGOS, OR OVERLAY TEXT. Provide the processed image only." }
-            ]
-          }
-        });
-        const imagePart = rectificationResponse.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-        if (imagePart && imagePart.inlineData) cleanedImage = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
-      } catch (err) { console.warn("Rectification failed."); }
-
-      setProcessStatus('AI: Extracting metadata...');
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: { 
-          parts: [
-            { inlineData: { data: cleanedImage.split(',')[1], mimeType: 'image/jpeg' } }, 
-            { text: `Extract metadata from this certificate. Return ONLY valid JSON. Standardize date to YYYY-MM-DD. 
-                     STRICTLY CATEGORIZE into ONE of these: ${categoriesList.join(', ')}. 
-                     If no match, use 'Other'.` }
-          ] 
-        },
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              studentName: { type: Type.STRING },
-              issuer: { type: Type.STRING },
-              date: { type: Type.STRING },
-              category: { type: Type.STRING },
-              summary: { type: Type.STRING }
-            },
-            required: ["title", "studentName", "issuer", "date", "category", "summary"]
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text.trim());
-      const finalCategory = categoriesList.find(c => c.toLowerCase() === data.category?.toLowerCase()) || 'Other';
-
-      setPendingCert({
-        id: Date.now().toString(),
-        image: cleanedImage, profileId: activeProfileId,
-        studentName: data.studentName || "", title: data.title || "Record Scan",
-        issuer: data.issuer || "", date: data.date || new Date().toISOString().split('T')[0],
-        category: finalCategory, summary: data.summary || "", createdAt: Date.now()
-      });
-      setView('editor');
-    } catch (err: any) {
-      setError("AI analysis failed. Manual entry enabled.");
-      setPendingCert({
-        id: Date.now().toString(), image: base64Data, profileId: activeProfileId,
-        studentName: "", title: "New Certificate", issuer: "", date: new Date().toISOString().split('T')[0],
-        category: 'Other', summary: "", createdAt: Date.now()
-      });
-      setView('editor');
-    } finally { setIsProcessing(false); setProcessStatus(''); }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!activeProfileId) {
-      setError("Please create a profile first to upload achievements.");
-      setIsAddingProfile(true);
-      e.target.value = '';
-      return;
-    }
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsProcessing(true);
-    setProcessStatus('Reading document...');
-    try {
-      let imageData = (file.type === 'application/pdf') ? await pdfToImage(file) : await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target?.result as string);
-        reader.readAsDataURL(file);
-      });
-      await processCertificate(await resizeImage(imageData));
-    } catch (err: any) { setError("Failed to load document."); setIsProcessing(false); }
-    e.target.value = '';
-  };
-
-  const generatePDFBlob = async (certs: Certificate[]) => {
-    const { jsPDF } = (window as any).jspdf;
-    const doc = new jsPDF('p', 'mm', 'a4');
-    const pageWidth = 210;
-    const pageHeight = 297;
-    const margin = 20;
-    const contentWidth = pageWidth - (margin * 2);
-
-    for (let i = 0; i < certs.length; i++) {
-      if (i > 0) doc.addPage();
-      const cert = certs[i];
-      
-      // Force wait for image loading to avoid "visibility" issues in PDF
-      const img = new Image();
-      img.src = cert.image;
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
-
-      // Professional Layout Styling
-      // 1. Header Information
-      doc.setFont("helvetica", "bold").setFontSize(18).setTextColor(30, 41, 59).text(cert.title, margin, 25);
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100, 116, 139).text(`Issued by: ${cert.issuer}`, margin, 32);
-      
-      // 2. High Visibility Certificate Image
-      // Max height available leaving room for metadata footer
-      const startY = 42;
-      const maxImgHeight = 165; 
-
-      let finalWidth = contentWidth;
-      let finalHeight = (img.naturalHeight * finalWidth) / img.naturalWidth;
-      
-      if (finalHeight > maxImgHeight) {
-        finalHeight = maxImgHeight;
-        finalWidth = (img.naturalWidth * finalHeight) / img.naturalHeight;
-      }
-      
-      // Center image horizontally within margins
-      const xOffset = margin + (contentWidth - finalWidth) / 2;
-      doc.addImage(cert.image, 'JPEG', xOffset, startY, finalWidth, finalHeight);
-
-      // 3. Metadata and Professional Summary Sections
-      let yPosition = startY + finalHeight + 15;
-      
-      // Section Divider Line
-      doc.setDrawColor(241, 245, 249);
-      doc.setLineWidth(0.5);
-      doc.line(margin, yPosition - 8, pageWidth - margin, yPosition - 8);
-
-      // Achievement Category Details
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Achievement Category Details:", margin, yPosition);
-      yPosition += 6;
-      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(71, 85, 105).text(`${cert.category}: ${catDesc}`, margin, yPosition);
-      
-      yPosition += 12;
-      
-      // Reason for Award / Summary
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Reason for Award / Summary:", margin, yPosition);
-      yPosition += 6;
-      
-      // Automatic line wrapping for summaries
-      const summaryLines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", contentWidth);
-      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(100, 116, 139).text(summaryLines, margin, yPosition);
-
-      // Footer branding
-      doc.setFontSize(8).setTextColor(203, 213, 225).text(`Vaulted with CertiVault • ${new Date().toLocaleDateString()}`, margin, pageHeight - 12);
-    }
-    return doc.output('blob');
-  };
-
-  const filteredCerts = useMemo(() => {
-    let res = certificates.filter(c => c.profileId === activeProfileId);
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      res = res.filter(c => 
-        c.title.toLowerCase().includes(q) || 
-        c.issuer.toLowerCase().includes(q) || 
-        c.category.toLowerCase().includes(q) ||
-        getAcademicYear(c.date).toLowerCase().includes(q)
-      );
-    }
-    if (selectedFilterTags.length > 0) {
-      res = res.filter(c => 
-        selectedFilterTags.some(tag => tag.toLowerCase() === c.category.toLowerCase()) || 
-        selectedFilterTags.some(tag => tag.toLowerCase() === getAcademicYear(c.date).toLowerCase())
-      );
-    }
-    return res;
-  }, [certificates, activeProfileId, searchQuery, selectedFilterTags]);
-
-  const academicHierarchy = useMemo(() => {
-    const h: Record<string, Record<string, Certificate[]>> = {};
-    filteredCerts.forEach(cert => {
-      const ay = getAcademicYear(cert.date);
-      const cat = cert.category || 'Other';
-      if (!h[ay]) h[ay] = {};
-      if (!h[ay][cat]) h[ay][cat] = [];
-      h[ay][cat].push(cert);
-    });
-    return h;
-  }, [filteredCerts]);
-
-  const sortedYears = useMemo(() => Object.keys(academicHierarchy).sort((a, b) => b.localeCompare(a)), [academicHierarchy]);
-
-  const availableYears = useMemo(() => {
-    const years = new Set<string>();
-    certificates.filter(c => c.profileId === activeProfileId).forEach(c => years.add(getAcademicYear(c.date)));
-    return Array.from(years).sort((a,b) => b.localeCompare(a));
-  }, [certificates, activeProfileId]);
-
-  const toggleFilterTag = (tag: string) => {
-    setSelectedFilterTags(prev => 
-      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
-    );
   };
 
   const capturePhoto = async () => {
     if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth; canvas.height = videoRef.current.videoHeight;
-    canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
-    const b = canvas.toDataURL('image/jpeg', 0.85);
-    stopCamera(); 
-    setView('dashboard'); 
-    await processCertificate(await resizeImage(b));
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(videoRef.current, 0, 0);
+    const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+    stopCamera();
+    processCertificate(await resizeImage(base64Image));
   };
 
-  const handleBatchShare = async () => {
-    if (selectedIds.size === 0) return;
+  const processCertificate = async (base64Data: string) => {
     setIsProcessing(true);
-    setProcessStatus('Generating shared PDF...');
+    setProcessStatus('AI Analysis & Extraction...');
     try {
-      const selectedCerts = certificates.filter(c => selectedIds.has(c.id));
-      const blob = await generatePDFBlob(selectedCerts);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `CertiVault_Report_${Date.now()}.pdf`;
-      a.click();
-      setIsSelectionMode(false);
-      setSelectedIds(new Set());
-    } catch (err) {
-      setError("Export failed.");
-    } finally {
-      setIsProcessing(false);
-    }
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const rectificationResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [
+            { inlineData: { data: base64Data.split(',')[1], mimeType: 'image/jpeg' } },
+            { text: "Transform this certificate scan into a clean, flat, high-quality A4 document. Remove all background noise and perspective distortion." }
+          ]
+        }
+      });
+      const imgPart = rectificationResponse.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+      const cleaned = imgPart ? `data:image/png;base64,${imgPart.inlineData.data}` : base64Data;
+
+      const metadataResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { 
+          parts: [{ inlineData: { data: cleaned.split(',')[1], mimeType: 'image/jpeg' } }, { text: "Return metadata as JSON: {title, studentName, issuer, date, category, summary}" }]
+        },
+        config: { responseMimeType: "application/json" }
+      });
+
+      const data = JSON.parse(metadataResponse.text);
+      setPendingCert({
+        id: Date.now().toString(), image: cleaned, profileId: activeProfileId,
+        studentName: data.studentName || "", title: data.title || "Record Scan",
+        issuer: data.issuer || "", date: data.date || new Date().toISOString().split('T')[0],
+        category: categoriesList.includes(data.category) ? data.category : 'Other', 
+        summary: data.summary || "", createdAt: Date.now()
+      });
+      setView('editor');
+    } catch (err: any) {
+      setError("AI Analysis failed. Please enter details manually.");
+      setPendingCert({ id: Date.now().toString(), image: base64Data, profileId: activeProfileId, title: "Record Scan", date: new Date().toISOString().split('T')[0], category: 'Other', createdAt: Date.now() });
+      setView('editor');
+    } finally { setIsProcessing(false); }
   };
 
-  const toggleSelect = (id: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedIds(next);
-  };
-
-  const handleRotate = async (degrees: number) => {
-    if (pendingCert?.image) {
-      setIsProcessing(true);
-      setProcessStatus('Adjusting orientation...');
-      try {
-        const rotated = await rotateImage(pendingCert.image, degrees);
-        setPendingCert({ ...pendingCert, image: rotated });
-      } catch (err) {
-        setError("Failed to rotate image.");
-      } finally {
-        setIsProcessing(false);
-      }
-    }
-  };
+  const filteredCerts = useMemo(() => certificates.filter(c => c.profileId === activeProfileId), [certificates, activeProfileId]);
+  const sortedYears = useMemo(() => Array.from(new Set(filteredCerts.map(c => getAcademicYear(c.date)))).sort().reverse(), [filteredCerts]);
 
   return (
-    <div className="min-h-screen bg-white font-sans text-slate-900 select-none overflow-x-hidden">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 overflow-x-hidden">
       {isProcessing && (
-        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
-          <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-          <h2 className="text-xl font-black">{processStatus}</h2>
+        <div className="fixed inset-0 z-[200] bg-white/95 backdrop-blur-xl flex flex-col items-center justify-center animate-in fade-in">
+          <div className="relative">
+             <Loader2 className="w-16 h-16 text-indigo-600 animate-spin mb-6" />
+             <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-indigo-400 animate-pulse" />
+          </div>
+          <h2 className="text-2xl font-black tracking-tight">{processStatus}</h2>
+          <p className="text-slate-400 font-bold text-sm mt-2">Optimizing for professional standards...</p>
         </div>
       )}
 
       {error && (
-        <div className="fixed top-4 left-4 right-4 z-[300] p-4 bg-slate-900 text-white rounded-xl flex justify-between items-center shadow-2xl animate-in slide-in-from-top-4">
-          <span className="text-sm font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-indigo-400" /> {error}</span>
-          <button onClick={() => setError(null)}><X className="w-4 h-4" /></button>
-        </div>
-      )}
-
-      {view === 'dashboard' && (
-        <div className="max-w-4xl mx-auto p-4 md:p-8 animate-in fade-in pb-32">
-          <header className="flex justify-between items-center mb-10">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-lg"><FileText className="w-6 h-6" /></div>
-              <h1 className="text-2xl font-black tracking-tight text-slate-900">CertiVault</h1>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative group bg-slate-50 px-6 py-3 rounded-full border border-slate-100 flex items-center shadow-sm transition-all hover:bg-white hover:border-indigo-100 cursor-pointer">
-                  <select 
-                    value={activeProfileId}
-                    onChange={(e) => {
-                      setActiveProfileId(e.target.value);
-                      setNavPath({});
-                      setIsSelectionMode(false);
-                      setSelectedIds(new Set());
-                    }}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                  >
-                    {profiles.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                  <span className="font-black text-slate-800 text-lg tracking-tight leading-none mr-2">
-                    {profiles.find(p => p.id === activeProfileId)?.name || 'No Profile'}
-                  </span>
-                  <ChevronDown className="w-4 h-4 text-slate-400" />
-              </div>
-              <button onClick={() => setIsAddingProfile(true)} className="p-3 bg-slate-50 rounded-full border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors shadow-sm"><Plus className="w-6 h-6" /></button>
-            </div>
-          </header>
-
-          <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm p-8 space-y-6 mb-10">
-            <div className="relative">
-              <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-              <input type="text" placeholder="Search record..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-14 pr-4 py-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none placeholder:text-slate-400" />
-            </div>
-            <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
-              {availableYears.map(year => (
-                <button key={year} onClick={() => toggleFilterTag(year)} className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase shrink-0 transition-all ${selectedFilterTags.includes(year) ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}>{year}</button>
-              ))}
-              <div className="w-[1px] h-6 bg-slate-200 shrink-0 mx-2" />
-              {PRIORITY_CATEGORIES.map(cat => (
-                <button key={cat} onClick={() => toggleFilterTag(cat)} className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase shrink-0 transition-all ${selectedFilterTags.includes(cat) ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}>{cat}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 mb-12">
-            <button onClick={startCamera} className="py-6 bg-slate-900 text-white rounded-3xl font-black flex items-center justify-center gap-3 active:scale-95 transition-transform shadow-xl"><Camera className="w-5 h-5" /> Scan</button>
-            <button onClick={() => fileInputRef.current?.click()} className="py-6 bg-white text-slate-900 border border-slate-200 rounded-3xl font-black flex items-center justify-center gap-3 active:scale-95 transition-transform shadow-sm"><Upload className="w-5 h-5" /> Import</button>
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*,application/pdf" className="hidden" />
-          </div>
-
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 px-1">
-            <div className="flex items-center gap-2 text-sm font-black text-indigo-600 uppercase tracking-tight overflow-x-auto no-scrollbar max-w-full">
-              <button onClick={() => {setNavPath({}); setSearchQuery(''); setSelectedFilterTags([]);}} className="flex items-center gap-2 whitespace-nowrap">
-                <Home className="w-4 h-4" /> ROOT
-              </button>
-              {navPath.year && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><button onClick={() => setNavPath({ year: navPath.year })} className="hover:text-indigo-800 whitespace-nowrap">{navPath.year}</button></>}
-              {navPath.category && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><span className="whitespace-nowrap">{navPath.category}</span></>}
-            </div>
-            
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              {!isSelectionMode ? (
-                <button 
-                  onClick={() => setIsSelectionMode(true)} 
-                  className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all w-full sm:w-auto justify-center"
-                >
-                  <CheckSquare className="w-3.5 h-3.5" /> Select Multiple
-                </button>
-              ) : (
-                <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="fixed top-4 left-4 right-4 z-[300] p-5 bg-slate-900 text-white rounded-[2rem] shadow-2xl animate-in slide-in-from-top-4">
+          <div className="flex justify-between items-start">
+             <div className="flex items-start gap-4">
+               <div className="p-2 bg-red-500 rounded-xl mt-0.5"><AlertCircle className="w-5 h-5 text-white" /></div>
+               <div>
+                 <span className="text-sm font-black uppercase tracking-widest text-red-400 block mb-1">Error Detected</span>
+                 <p className="text-sm font-bold text-slate-200 leading-relaxed">{error}</p>
+                 {showConfigHelp && (
                    <button 
-                    onClick={() => { setIsSelectionMode(false); setSelectedIds(new Set()); }} 
-                    className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest text-center"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </div>
+                    onClick={() => setShowConfigHelp(!showConfigHelp)} 
+                    className="mt-3 text-xs font-black text-indigo-400 flex items-center gap-2 hover:text-indigo-300"
+                   >
+                     <Settings className="w-4 h-4" /> View Configuration Guide
+                   </button>
+                 )}
+               </div>
+             </div>
+             <button onClick={() => setError(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5" /></button>
           </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-6">
-            {!navPath.year ? sortedYears.map(ay => (
-              <button key={ay} onClick={() => setNavPath({ year: ay })} className="flex flex-col items-center gap-4 p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all text-center">
-                <div className="relative"><Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" /></div>
-                <div>
-                  <span className="font-black text-slate-800 text-base block">{ay}</span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).flat().length} Records</span>
-                </div>
-              </button>
-            )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year!] || {}).map(cat => (
-              <button key={cat} onClick={() => goToCategory(cat)} className="group flex flex-col items-center gap-4 p-6 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all">
-                <Folder className="w-16 h-16 text-slate-400 fill-slate-50 group-hover:scale-110 transition-transform duration-300" />
-                <div className="text-center">
-                  <span className="block text-sm font-black text-slate-800 tracking-tight">{cat}</span>
-                  <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
-                    {academicHierarchy[navPath.year!]?.[cat]?.length || 0} Files
-                  </span>
-                </div>
-              </button>
-            )) : (academicHierarchy[navPath.year!]?.[navPath.category!] || []).map(cert => (
-              <div 
-                key={cert.id} 
-                onClick={() => { 
-                  if (isSelectionMode) toggleSelect(cert.id);
-                  else { setSelectedCert(cert); setView('detail'); }
-                }} 
-                className={`bg-white rounded-3xl border overflow-hidden relative transition-all border-slate-100 shadow-sm hover:shadow-md cursor-pointer ${isSelectionMode && selectedIds.has(cert.id) ? 'ring-2 ring-indigo-600' : ''}`}
-              >
-                {isSelectionMode && (
-                  <div className="absolute top-3 left-3 z-10 p-1 bg-white/80 backdrop-blur-sm rounded-lg shadow-sm">
-                    {selectedIds.has(cert.id) ? (
-                      <CheckSquare className="w-6 h-6 text-indigo-600 fill-white" />
-                    ) : (
-                      <Square className="w-6 h-6 text-slate-300" />
-                    )}
-                  </div>
-                )}
-                <div className="aspect-[1.414/1] bg-slate-50 p-2 flex items-center justify-center">
-                  <img src={cert.image} className="max-h-full object-contain" />
-                </div>
-                <div className="p-4">
-                  <h3 className="text-sm font-black truncate text-slate-800">{cert.title}</h3>
-                  <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1 truncate">{cert.issuer}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Floating Action Bar for Selection Mode */}
-          {isSelectionMode && selectedIds.size > 0 && (
-            <div className="fixed bottom-8 left-1/2 -translate-x-1/2 w-full max-w-sm px-4 z-[180] animate-in slide-in-from-bottom-8">
-              <div className="bg-slate-900 text-white rounded-[2rem] p-4 shadow-2xl flex items-center justify-between gap-4 border border-white/10">
-                <div className="pl-4">
-                  <span className="text-xs font-black uppercase tracking-widest text-indigo-400 block">{selectedIds.size} Selected</span>
-                  <span className="text-[10px] font-bold text-slate-400">Ready to export</span>
-                </div>
-                <button 
-                  onClick={handleBatchShare}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-2 transition-all active:scale-95"
-                >
-                  <Share2 className="w-4 h-4" /> Share PDF
-                </button>
-              </div>
+          
+          {showConfigHelp && (
+            <div className="mt-6 pt-6 border-t border-white/10 space-y-4 animate-in slide-in-from-top-2">
+               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">How to fix the 400 error:</p>
+               <ol className="text-xs font-medium text-slate-300 space-y-3 list-decimal pl-4">
+                 <li>Go to your <a href="https://console.cloud.google.com/apis/credentials" target="_blank" className="text-indigo-400 underline">Google Cloud Console</a>.</li>
+                 <li>Select your OAuth Client ID and edit it.</li>
+                 <li>Add <code className="bg-white/10 px-2 py-0.5 rounded text-white">{window.location.origin}</code> to **Authorized JavaScript origins**.</li>
+                 <li>Wait 5 minutes and try again.</li>
+               </ol>
             </div>
           )}
         </div>
       )}
 
-      {view === 'scanner' && (
-        <div className="fixed inset-0 bg-black z-[100] flex flex-col overflow-hidden">
-          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          
-          <button 
-            onClick={() => { stopCamera(); setView('dashboard'); }} 
-            className="absolute top-8 left-8 p-4 bg-slate-800/60 backdrop-blur-md rounded-2xl text-white hover:bg-slate-800 transition-all z-[110]"
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
+      {view === 'dashboard' && (
+        <div className="max-w-5xl mx-auto p-4 md:p-10 pb-32">
+          <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-12">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-indigo-600 rounded-[1.25rem] text-white shadow-xl shadow-indigo-200"><FileText className="w-7 h-7" /></div>
+              <div>
+                <h1 className="text-3xl font-black text-slate-900 tracking-tighter">CertiVault</h1>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Digital Achievement Repository</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-4 w-full sm:w-auto">
+              {googleUser ? (
+                <div className="flex items-center gap-3 bg-white pl-1.5 pr-5 py-1.5 rounded-full border border-slate-200 shadow-sm transition-all hover:shadow-md">
+                  <img src={googleUser.picture} className="w-9 h-9 rounded-full border-2 border-slate-50 shadow-inner" />
+                  <div className="flex flex-col">
+                    <span className="text-xs font-black text-slate-800 leading-none mb-1">{googleUser.name.split(' ')[0]}</span>
+                    <button onClick={() => { setGoogleUser(null); setAccessToken(null); }} className="text-[10px] font-black text-red-400 uppercase tracking-widest text-left hover:text-red-500">Sign Out</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={handleGoogleLogin} className="flex-1 sm:flex-none flex items-center justify-center gap-3 px-6 py-3.5 bg-white text-indigo-600 border border-indigo-100 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-indigo-50 transition-all shadow-sm">
+                  <UserIcon className="w-5 h-5" /> Sign In
+                </button>
+              )}
+              
+              <div className="flex-1 sm:flex-none relative flex items-center bg-white px-5 py-3.5 rounded-2xl border border-slate-200 shadow-sm group hover:border-indigo-300 transition-colors">
+                  <select value={activeProfileId} onChange={(e) => setActiveProfileId(e.target.value)} className="font-black text-slate-800 text-sm outline-none appearance-none pr-6 bg-transparent cursor-pointer w-full">
+                    {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {profiles.length === 0 && <option value="" disabled>No Profiles</option>}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-4 pointer-events-none group-hover:text-indigo-500" />
+              </div>
+              <button onClick={() => setIsAddingProfile(true)} className="p-4 bg-indigo-600 text-white rounded-2xl shadow-xl shadow-indigo-100 hover:scale-105 transition-transform"><Plus className="w-6 h-6" /></button>
+            </div>
+          </header>
 
-          <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center z-[110]">
-            <button 
-              onClick={capturePhoto} 
-              className="w-24 h-24 rounded-full border-[6px] border-white/30 p-1.5 active:scale-95 transition-transform bg-transparent flex items-center justify-center"
-            >
-              <div className="w-full h-full bg-white rounded-full shadow-2xl" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-12">
+            <button onClick={startCamera} className="group relative overflow-hidden py-8 bg-slate-900 text-white rounded-[2.5rem] font-black flex flex-col items-center justify-center gap-3 shadow-2xl active:scale-[0.98] transition-all">
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <Camera className="w-8 h-8 group-hover:scale-110 transition-transform" /> 
+              <span className="text-sm uppercase tracking-widest">Digital Scan</span>
+            </button>
+            <button onClick={syncToDrive} className="group relative overflow-hidden py-8 bg-indigo-600 text-white rounded-[2.5rem] font-black flex flex-col items-center justify-center gap-3 shadow-2xl active:scale-[0.98] transition-all">
+              <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <CloudUpload className="w-8 h-8 group-hover:scale-110 transition-transform" /> 
+              <span className="text-sm uppercase tracking-widest">{accessToken ? "Sync Cloud Vault" : "Connect Drive"}</span>
             </button>
           </div>
-          
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 h-96 border-2 border-white/20 rounded-2xl pointer-events-none">
-            <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-white rounded-tl-xl" />
-            <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-white rounded-tr-xl" />
-            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white rounded-bl-xl" />
-            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-white rounded-br-xl" />
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-8">
+            {!navPath.year ? sortedYears.map(ay => (
+              <button key={ay} onClick={() => setNavPath({ year: ay })} className="flex flex-col items-center gap-5 p-10 bg-white rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-2 transition-all group">
+                <div className="relative">
+                   <Folder className="w-20 h-20 text-indigo-400 fill-indigo-50 group-hover:text-indigo-500 group-hover:fill-indigo-100 transition-all" />
+                   <div className="absolute inset-0 flex items-center justify-center mt-2">
+                     <span className="text-[10px] font-black text-indigo-700 bg-white px-2 py-0.5 rounded shadow-sm">{ay.split('-')[1].slice(-2)}</span>
+                   </div>
+                </div>
+                <div className="text-center">
+                  <span className="font-black text-slate-800 text-lg tracking-tight">{ay}</span>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                    {filteredCerts.filter(c => getAcademicYear(c.date) === ay).length} Items
+                  </p>
+                </div>
+              </button>
+            )) : !navPath.category ? Array.from(new Set(filteredCerts.filter(c => getAcademicYear(c.date) === navPath.year).map(c => c.category))).map(cat => (
+              <button key={cat} onClick={() => setNavPath({ ...navPath, category: cat })} className="flex flex-col items-center gap-5 p-10 bg-white rounded-[3rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-2 transition-all group">
+                <Folder className="w-20 h-20 text-slate-300 fill-slate-50 group-hover:text-indigo-400 group-hover:fill-indigo-50 transition-all" />
+                <div className="text-center">
+                  <span className="font-black text-slate-800 text-lg tracking-tight">{cat}</span>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                    {filteredCerts.filter(c => getAcademicYear(c.date) === navPath.year && c.category === cat).length} Files
+                  </p>
+                </div>
+              </button>
+            )) : filteredCerts.filter(c => getAcademicYear(c.date) === navPath.year && c.category === navPath.category).map(cert => (
+              <div key={cert.id} onClick={() => { setSelectedCert(cert); setView('detail'); }} className="group bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden hover:shadow-2xl transition-all cursor-pointer relative">
+                <div className="aspect-[1.414/1] bg-slate-50 p-4 flex items-center justify-center overflow-hidden">
+                  <img src={cert.image} className="max-h-full object-contain group-hover:scale-105 transition-transform duration-500" />
+                  {cert.synced && <div className="absolute top-4 right-4 p-2 bg-green-500/90 backdrop-blur-sm text-white rounded-full shadow-lg"><Check className="w-3 h-3" /></div>}
+                </div>
+                <div className="p-6">
+                  <h3 className="text-sm font-black truncate text-slate-900 mb-1">{cert.title}</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate flex-1">{cert.issuer}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {navPath.year && (
+             <button onClick={() => setNavPath({})} className="fixed bottom-10 left-1/2 -translate-x-1/2 px-10 py-5 bg-slate-900 text-white rounded-full font-black text-xs uppercase tracking-[0.2em] shadow-2xl flex items-center gap-3 hover:bg-slate-800 transition-all active:scale-95 animate-in slide-in-from-bottom-6"><ChevronLeft className="w-5 h-5" /> All Academic Years</button>
+          )}
+        </div>
+      )}
+
+      {view === 'scanner' && (
+        <div className="fixed inset-0 bg-black z-[150] flex flex-col">
+          <div className="relative flex-1 flex items-center justify-center overflow-hidden">
+            <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+            <button onClick={() => { stopCamera(); setView('dashboard'); }} className="absolute top-8 left-8 p-5 bg-white/10 backdrop-blur-xl rounded-[1.5rem] text-white hover:bg-white/20 transition-all">
+              <ChevronLeft className="w-7 h-7" />
+            </button>
+            
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] max-w-sm aspect-[1.414/1] border-2 border-white/50 rounded-[2rem] pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]">
+              <div className="absolute inset-0 bg-indigo-500/5 rounded-[2rem] animate-pulse" />
+              <div className="absolute top-0 left-0 w-10 h-10 border-t-4 border-l-4 border-indigo-500 rounded-tl-[1.5rem]" />
+              <div className="absolute top-0 right-0 w-10 h-10 border-t-4 border-r-4 border-indigo-500 rounded-tr-[1.5rem]" />
+              <div className="absolute bottom-0 left-0 w-10 h-10 border-b-4 border-l-4 border-indigo-500 rounded-bl-[1.5rem]" />
+              <div className="absolute bottom-0 right-0 w-10 h-10 border-b-4 border-r-4 border-indigo-500 rounded-br-[1.5rem]" />
+            </div>
+          </div>
+          <div className="bg-black p-16 flex flex-col items-center gap-6">
+            <button onClick={capturePhoto} className="w-24 h-24 rounded-full border-[6px] border-white/20 p-2 transition-transform active:scale-90 bg-transparent flex items-center justify-center group">
+              <div className="w-full h-full bg-white rounded-full shadow-[0_0_40px_rgba(255,255,255,0.3)] group-hover:scale-95 transition-transform" />
+            </button>
+            <p className="text-white/40 font-black text-[10px] uppercase tracking-[0.3em]">Center document in frame</p>
           </div>
         </div>
       )}
 
       {view === 'editor' && pendingCert && (
-        <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in slide-in-from-bottom duration-500 overflow-hidden">
-          <header className="p-6 pt-8 flex justify-between items-center bg-white z-[160] border-b border-slate-100">
-            <button onClick={() => setView('dashboard')} className="p-3 bg-slate-50 rounded-2xl text-slate-600"><ChevronLeft className="w-6 h-6" /></button>
-            <h2 className="text-xl font-black tracking-tight text-slate-900 flex items-center gap-2"><Sparkles className="w-5 h-5 text-indigo-600" /> Verify Achievement</h2>
-            <button onClick={() => { 
-                if(!pendingCert.title) return setError("Title required.");
-                setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); 
-                setView('dashboard'); 
-              }} className="text-indigo-600 font-black px-4 uppercase text-sm tracking-widest">SAVE</button>
+        <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in slide-in-from-bottom duration-500">
+          <header className="p-6 border-b border-slate-100 flex justify-between items-center">
+            <button onClick={() => setView('dashboard')} className="p-3 hover:bg-slate-50 rounded-2xl transition-colors"><ChevronLeft className="w-6 h-6 text-slate-400" /></button>
+            <h2 className="text-xl font-black tracking-tight text-slate-800 flex items-center gap-2"><Sparkles className="w-5 h-5 text-indigo-500" /> Professional Review</h2>
+            <button onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, synced: false } as Certificate, ...p]); setView('dashboard'); }} className="text-indigo-600 font-black uppercase text-xs tracking-widest px-4 py-2 hover:bg-indigo-50 rounded-xl transition-colors">Vault</button>
           </header>
           
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-40">
-            <div className="relative aspect-[1.414/1] w-full bg-slate-50 rounded-[2.5rem] flex items-center justify-center p-6 border border-slate-100 shadow-sm mx-auto max-w-lg group">
-               <img src={pendingCert.image} className="max-h-full object-contain rounded-lg shadow-sm" />
-               <div className="absolute bottom-6 right-6 flex gap-2">
-                 <button onClick={() => handleRotate(-90)} className="p-4 bg-slate-900/80 backdrop-blur-md text-white rounded-2xl hover:bg-slate-900 shadow-xl transition-all"><RotateCcw className="w-5 h-5" /></button>
-                 <button onClick={() => handleRotate(90)} className="p-4 bg-slate-900/80 backdrop-blur-md text-white rounded-2xl hover:bg-slate-900 shadow-xl transition-all"><RotateCw className="w-5 h-5" /></button>
+          <div className="flex-1 overflow-y-auto p-6 lg:p-12 space-y-12 pb-40">
+            <div className="relative aspect-[1.414/1] max-w-3xl mx-auto w-full bg-slate-100 rounded-[3rem] flex items-center justify-center p-8 shadow-inner border border-slate-200/50">
+               <img src={pendingCert.image} className="max-h-full object-contain rounded-[0.5rem] shadow-2xl" />
+               <div className="absolute bottom-8 right-8 flex gap-3">
+                 <button onClick={async () => setPendingCert({ ...pendingCert, image: await rotateImage(pendingCert.image!, -90) })} className="p-4 bg-slate-900/90 backdrop-blur-xl text-white rounded-[1.25rem] hover:bg-slate-900 shadow-2xl transition-all active:scale-95"><RotateCcw className="w-6 h-6" /></button>
+                 <button onClick={async () => setPendingCert({ ...pendingCert, image: await rotateImage(pendingCert.image!, 90) })} className="p-4 bg-slate-900/90 backdrop-blur-xl text-white rounded-[1.25rem] hover:bg-slate-900 shadow-2xl transition-all active:scale-95"><RotateCw className="w-6 h-6" /></button>
                </div>
             </div>
 
-            <div className="space-y-6 max-w-lg mx-auto">
+            <div className="max-w-2xl mx-auto space-y-8">
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Issued By</label>
-                <input type="text" value={pendingCert.issuer} onChange={e => setPendingCert({...pendingCert, issuer: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Achievement Title</label>
+                <input type="text" value={pendingCert.title} onChange={e => setPendingCert({ ...pendingCert, title: e.target.value })} className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-black text-lg outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white transition-all" />
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
                 <div className="space-y-2">
-                  <div className="flex justify-between items-center px-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Category</label>
-                    <button onClick={() => setIsAddingCustomCategory(true)} className="text-[10px] text-indigo-600 font-black uppercase tracking-widest">+ CUSTOM</button>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Issuer / Institution</label>
+                  <input type="text" value={pendingCert.issuer} onChange={e => setPendingCert({ ...pendingCert, issuer: e.target.value })} className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Classification</label>
+                  <div className="relative">
+                    <select value={pendingCert.category} onChange={e => setPendingCert({ ...pendingCert, category: e.target.value })} className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none appearance-none cursor-pointer">
+                      {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                   </div>
-                  {isAddingCustomCategory ? (
-                    <div className="flex gap-2">
-                      <input autoFocus value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} placeholder="New..." className="w-full p-5 bg-indigo-50 rounded-2xl font-bold text-sm outline-none" />
-                      <div className="flex flex-col gap-1">
-                        <button onClick={() => { if (newCategoryInput.trim()) { setCustomCategories(p => [...p, newCategoryInput.trim()]); setPendingCert({...pendingCert, category: newCategoryInput.trim()}); setNewCategoryInput(''); setIsAddingCustomCategory(false); } }} className="p-3 bg-indigo-600 text-white rounded-xl"><Check className="w-4 h-4" /></button>
-                        <button onClick={() => { setIsAddingCustomCategory(false); setNewCategoryInput(''); }} className="p-3 bg-slate-200 text-slate-500 rounded-xl"><X className="w-4 h-4" /></button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <select value={pendingCert.category} onChange={e => setPendingCert({...pendingCert, category: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none appearance-none">
-                        {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                    </div>
-                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Student Name</label>
+                  <input type="text" value={pendingCert.studentName} onChange={e => setPendingCert({ ...pendingCert, studentName: e.target.value })} className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Award Date</label>
-                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none text-slate-800 w-full" />
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Official Award Date</label>
+                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({ ...pendingCert, date: e.target.value })} className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none" />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Student Name</label>
-                <input type="text" value={pendingCert.studentName} onChange={e => setPendingCert({...pendingCert, studentName: e.target.value})} className="w-full p-5 bg-[#F8F9FD] rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">AI Context / Summary</label>
-                <textarea value={pendingCert.summary} onChange={e => setPendingCert({...pendingCert, summary: e.target.value})} className="w-full p-6 bg-[#F8F9FD] rounded-3xl font-medium text-xs h-40 border-none outline-none shadow-inner resize-none leading-relaxed text-slate-600" />
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Professional Summary</label>
+                <textarea value={pendingCert.summary} onChange={e => setPendingCert({ ...pendingCert, summary: e.target.value })} className="w-full p-6 bg-slate-50 border border-slate-100 rounded-[2rem] text-sm h-40 resize-none outline-none focus:ring-2 focus:ring-indigo-100 leading-relaxed font-medium" placeholder="Describe the achievement context..." />
               </div>
             </div>
           </div>
           
-          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-slate-100 z-[170]">
-            <button 
-              onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); setView('dashboard'); }} 
-              className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl shadow-indigo-100 uppercase tracking-widest text-sm hover:bg-indigo-700 transition-colors active:scale-95"
-            >
-              VAULT ACHIEVEMENT
-            </button>
+          <div className="p-8 bg-white border-t border-slate-100 flex justify-center">
+             <button 
+              onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, synced: false } as Certificate, ...p]); setView('dashboard'); }} 
+              className="w-full max-w-2xl py-6 bg-indigo-600 text-white rounded-[2rem] font-black text-sm uppercase tracking-widest shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-[0.98]"
+             >
+               Finalize & Vault Achievement
+             </button>
           </div>
         </div>
       )}
 
       {view === 'detail' && selectedCert && (
-        <div className="fixed inset-0 z-[150] bg-white flex flex-col p-6 overflow-y-auto animate-in fade-in">
-          <div className="flex justify-between items-center mb-8">
-            <button onClick={() => setView('dashboard')} className="p-3 bg-slate-50 rounded-2xl text-slate-600"><ChevronLeft className="w-6 h-6" /></button>
-            <div className="flex gap-3">
+        <div className="fixed inset-0 z-[150] bg-white flex flex-col p-6 lg:p-12 overflow-y-auto animate-in fade-in duration-500">
+          <div className="flex justify-between items-center mb-12">
+            <button onClick={() => setView('dashboard')} className="p-4 hover:bg-slate-50 rounded-2xl transition-colors"><ChevronLeft className="w-7 h-7 text-slate-400" /></button>
+            <div className="flex gap-4">
                <button onClick={async () => {
                  setIsProcessing(true);
-                 setProcessStatus('Preparing PDF...');
+                 setProcessStatus("Generating Document...");
                  try {
                    const blob = await generatePDFBlob([selectedCert]);
                    const url = URL.createObjectURL(blob);
                    const a = document.createElement('a');
                    a.href = url;
-                   a.download = `${selectedCert.title.replace(/\s+/g, '_')}.pdf`;
+                   a.download = `${selectedCert.title.replace(/\s+/g, '_')}_Record.pdf`;
                    a.click();
-                 } catch(e) { setError("PDF generation failed."); }
+                 } catch(e) { setError("PDF export failed."); }
                  setIsProcessing(false);
-               }} className="text-indigo-600 font-black text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-xl"><Share2 className="w-4 h-4" /> Share PDF</button>
-               <button onClick={() => { if(confirm("Permanently delete this?")) { setCertificates(p => p.filter(c => c.id !== selectedCert.id)); setView('dashboard'); } }} className="text-red-500 font-black text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 bg-red-50 rounded-xl"><Trash2 className="w-4 h-4" /> Delete</button>
+               }} className="text-indigo-600 font-black text-xs uppercase tracking-widest bg-indigo-50 px-6 py-3 rounded-2xl flex items-center gap-3 hover:bg-indigo-100 transition-all"><Share2 className="w-5 h-5" /> Export PDF</button>
+               <button onClick={() => { if(confirm("Permanently remove this record?")) { setCertificates(p => p.filter(c => c.id !== selectedCert.id)); setView('dashboard'); } }} className="text-red-500 font-black text-xs uppercase tracking-widest bg-red-50 px-6 py-3 rounded-2xl flex items-center gap-3 hover:bg-red-100 transition-all"><Trash2 className="w-5 h-5" /> Delete</button>
             </div>
           </div>
-          <div className="aspect-[1.414/1] w-full bg-white rounded-[3rem] flex items-center justify-center p-6 border border-slate-50 mb-10 shadow-2xl max-w-2xl mx-auto">
-            <img src={selectedCert.image} className="max-h-full object-contain rounded-lg" />
-          </div>
-          <div className="max-w-xl mx-auto w-full space-y-8 pb-12">
-            <div className="space-y-2">
-              <h2 className="text-3xl font-black leading-tight text-slate-900">{selectedCert.title}</h2>
-              <div className="flex gap-2">
-                <span className="bg-slate-100 px-3 py-1 rounded-lg text-[10px] font-black uppercase text-slate-500 tracking-widest">{selectedCert.issuer}</span>
-                <span className="bg-indigo-50 px-3 py-1 rounded-lg text-[10px] font-black uppercase text-indigo-600 tracking-widest">{getAcademicYear(selectedCert.date)}</span>
+          
+          <div className="max-w-4xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-16 items-start pb-20">
+            <div className="aspect-[1.414/1] w-full bg-slate-50 rounded-[3rem] shadow-2xl flex items-center justify-center p-8 border border-slate-100">
+              <img src={selectedCert.image} className="max-h-full object-contain rounded-lg" />
+            </div>
+            
+            <div className="space-y-10">
+              <div className="space-y-4">
+                 <h2 className="text-4xl font-black text-slate-900 leading-tight tracking-tight">{selectedCert.title}</h2>
+                 <div className="flex flex-wrap gap-3">
+                    <span className="bg-slate-900 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">{selectedCert.issuer}</span>
+                    <span className="bg-indigo-100 text-indigo-700 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">{getAcademicYear(selectedCert.date)}</span>
+                    <span className="bg-slate-100 text-slate-500 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">{selectedCert.category}</span>
+                 </div>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-8 text-[11px] font-black text-slate-400 uppercase tracking-widest border-t border-slate-50 pt-8">
-              <div>Category: <span className="text-slate-900 block mt-2 text-sm font-bold">{selectedCert.category}</span></div>
-              <div>Recipient: <span className="text-slate-900 block mt-2 text-sm font-bold">{selectedCert.studentName || "N/A"}</span></div>
-              <div>Issue Date: <span className="text-slate-900 block mt-2 text-sm font-bold">{selectedCert.date}</span></div>
-              <div>Vault Path: <span className="text-indigo-600 block mt-2 text-[10px] font-mono truncate">ROOT/{getAcademicYear(selectedCert.date)}/{selectedCert.category}</span></div>
-            </div>
-            <div className="p-8 bg-slate-50 rounded-[2.5rem] text-base italic text-slate-600 leading-relaxed border border-slate-100 shadow-inner">
-              "{selectedCert.summary || "No description provided."}"
+              
+              <div className="grid grid-cols-2 gap-10">
+                 <div className="space-y-1">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Recipient</span>
+                    <p className="font-bold text-slate-800 text-lg">{selectedCert.studentName || "N/A"}</p>
+                 </div>
+                 <div className="space-y-1">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Awarded</span>
+                    <p className="font-bold text-slate-800 text-lg">{new Date(selectedCert.date).toLocaleDateString()}</p>
+                 </div>
+              </div>
+
+              <div className="space-y-4">
+                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Official Record Description</span>
+                 <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 text-slate-600 font-medium leading-relaxed italic">
+                   "{selectedCert.summary || "This record serves as digital proof of achievement as documented in the institution's archive."}"
+                 </div>
+              </div>
+
+              <div className="flex items-center gap-4 p-6 bg-indigo-600 text-white rounded-[2rem] shadow-xl">
+                 <div className="p-3 bg-white/20 rounded-2xl"><ExternalLink className="w-5 h-5" /></div>
+                 <div className="flex-1">
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-70">Google Drive Path</p>
+                    <p className="text-xs font-bold truncate">/CertiVault/{profiles.find(p => p.id === activeProfileId)?.name}/{getAcademicYear(selectedCert.date)}/{selectedCert.category}</p>
+                 </div>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {isAddingProfile && (
-        <div className="fixed inset-0 z-[250] bg-black/60 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="bg-white p-10 rounded-[3rem] shadow-2xl w-full max-w-sm space-y-6">
-            <div className="space-y-2 text-center">
-              <h3 className="text-2xl font-black tracking-tight text-slate-900">New Profile</h3>
-              <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Create a vault for a person</p>
+        <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in">
+          <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl w-full max-w-sm space-y-8 animate-in zoom-in-95">
+            <div className="text-center space-y-2">
+              <h3 className="text-2xl font-black text-slate-900">Add Unique Profile</h3>
+              <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Initialize a separate achievement vault</p>
             </div>
-            <input autoFocus type="text" placeholder="Profile name..." value={newProfileName} onChange={e => setNewProfileName(e.target.value)} className="w-full p-5 bg-slate-50 rounded-2xl font-black outline-none border border-slate-100 focus:ring-2 focus:ring-indigo-100 transition-all" />
+            <input autoFocus type="text" value={newProfileName} onChange={e => setNewProfileName(e.target.value)} placeholder="Recipient Full Name" className="w-full p-6 bg-slate-50 rounded-2xl font-black outline-none border-2 border-transparent focus:border-indigo-500/20 focus:bg-white transition-all text-center" />
             <div className="flex gap-4">
-              <button onClick={() => setIsAddingProfile(false)} className="flex-1 py-4 text-slate-400 font-black text-xs uppercase tracking-widest">Cancel</button>
-              <button onClick={() => { if(newProfileName.trim()) { const n = { id: Date.now().toString(), name: newProfileName.trim() }; setProfiles(p => [...p, n]); setActiveProfileId(n.id); setNewProfileName(''); setIsAddingProfile(false); setNavPath({}); } }} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100">Create</button>
+              <button onClick={() => setIsAddingProfile(false)} className="flex-1 py-5 text-slate-400 font-black text-xs uppercase tracking-widest">Cancel</button>
+              <button onClick={() => { if(newProfileName.trim()) { const n = { id: Date.now().toString(), name: newProfileName.trim() }; setProfiles(p => [...p, n]); setActiveProfileId(n.id); setNewProfileName(''); setIsAddingProfile(false); } }} className="flex-1 py-5 bg-indigo-600 text-white rounded-[1.5rem] font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700">Initialize</button>
             </div>
           </div>
         </div>
