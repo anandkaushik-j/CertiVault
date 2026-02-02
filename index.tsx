@@ -280,6 +280,7 @@ const CertiVault = () => {
     const doc = new jsPDF('p', 'mm', 'a4');
     const pageWidth = 210;
     const margin = 20;
+    const contentWidth = pageWidth - (margin * 2);
 
     for (let i = 0; i < certs.length; i++) {
       if (i > 0) doc.addPage();
@@ -288,23 +289,39 @@ const CertiVault = () => {
       img.src = cert.image;
       await new Promise(r => img.onload = r);
 
-      doc.setFont("helvetica", "bold").setFontSize(18).text(cert.title, margin, 30);
+      // 1. Header Information
+      doc.setFont("helvetica", "bold").setFontSize(18).setTextColor(30).text(cert.title, margin, 30);
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100).text(`Issued by: ${cert.issuer}`, margin, 38);
       
-      const imgHeight = 120;
-      doc.addImage(cert.image, 'JPEG', margin, 45, pageWidth - (margin * 2), imgHeight);
-
-      let y = 45 + imgHeight + 15;
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Achievement Category Details:", margin, y);
-      y += 6;
-      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(80).text(`${cert.category}: ${catDesc}`, margin, y);
+      // 2. Optimized Image Placement (Aspect-Ratio Aware)
+      const maxImgHeight = 135; 
+      let finalWidth = contentWidth;
+      let finalHeight = (img.naturalHeight * finalWidth) / img.naturalWidth;
       
-      y += 12;
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Reason for Award / Summary:", margin, y);
-      y += 6;
-      const lines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", pageWidth - (margin * 2));
-      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(60).text(lines, margin, y);
+      if (finalHeight > maxImgHeight) {
+        finalHeight = maxImgHeight;
+        finalWidth = (img.naturalWidth * finalHeight) / img.naturalHeight;
+      }
+      
+      // Center image horizontally if it's smaller than contentWidth
+      const xOffset = margin + (contentWidth - finalWidth) / 2;
+      doc.addImage(cert.image, 'JPEG', xOffset, 45, finalWidth, finalHeight);
+
+      // 3. Achievement Details Section
+      let yPosition = 45 + finalHeight + 15;
+      
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Achievement Category Details:", margin, yPosition);
+      yPosition += 6;
+      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(80).text(`${cert.category}: ${catDesc}`, margin, yPosition);
+      
+      yPosition += 12;
+      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Reason for Award / Summary:", margin, yPosition);
+      yPosition += 6;
+      
+      // Split description into multiple lines to avoid overflow
+      const summaryLines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", contentWidth);
+      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(60).text(summaryLines, margin, yPosition);
     }
     return doc.output('blob');
   };
