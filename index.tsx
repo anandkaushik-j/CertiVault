@@ -279,6 +279,7 @@ const CertiVault = () => {
     const { jsPDF } = (window as any).jspdf;
     const doc = new jsPDF('p', 'mm', 'a4');
     const pageWidth = 210;
+    const pageHeight = 297;
     const margin = 20;
     const contentWidth = pageWidth - (margin * 2);
 
@@ -289,12 +290,16 @@ const CertiVault = () => {
       img.src = cert.image;
       await new Promise(r => img.onload = r);
 
-      // 1. Header Information
-      doc.setFont("helvetica", "bold").setFontSize(18).setTextColor(30).text(cert.title, margin, 30);
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100).text(`Issued by: ${cert.issuer}`, margin, 38);
+      // 1. Header Information (Moved higher for more image space)
+      doc.setFont("helvetica", "bold").setFontSize(16).setTextColor(30, 41, 59).text(cert.title, margin, 20);
+      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(100, 116, 139).text(`Issued by: ${cert.issuer}`, margin, 26);
       
-      // 2. Optimized Image Placement (Aspect-Ratio Aware)
-      const maxImgHeight = 135; 
+      // 2. Maximum Image Placement (Aiming for A4 size impact)
+      // Available height from header to bottom summary section
+      // Leave about 50mm at bottom for metadata and description
+      const maxImgHeight = 200; 
+      const startY = 32;
+
       let finalWidth = contentWidth;
       let finalHeight = (img.naturalHeight * finalWidth) / img.naturalWidth;
       
@@ -303,25 +308,36 @@ const CertiVault = () => {
         finalWidth = (img.naturalWidth * finalHeight) / img.naturalHeight;
       }
       
-      // Center image horizontally if it's smaller than contentWidth
+      // Center image horizontally within content area
       const xOffset = margin + (contentWidth - finalWidth) / 2;
-      doc.addImage(cert.image, 'JPEG', xOffset, 45, finalWidth, finalHeight);
+      doc.addImage(cert.image, 'JPEG', xOffset, startY, finalWidth, finalHeight);
 
-      // 3. Achievement Details Section
-      let yPosition = 45 + finalHeight + 15;
+      // 3. Achievement Details Section (Positioned dynamically relative to image)
+      let yPosition = startY + finalHeight + 12;
       
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Achievement Category Details:", margin, yPosition);
-      yPosition += 6;
+      // Ensure we don't bleed off the page
+      if (yPosition > pageHeight - 30) {
+        // Fallback if image is somehow massive - shouldn't happen with maxImgHeight
+        yPosition = pageHeight - 40;
+      }
+
+      doc.setDrawColor(241, 245, 249);
+      doc.line(margin, yPosition - 5, pageWidth - margin, yPosition - 5);
+
+      doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(51, 65, 85).text("Achievement Category Details:", margin, yPosition);
+      yPosition += 5;
       const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(80).text(`${cert.category}: ${catDesc}`, margin, yPosition);
+      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(71, 85, 105).text(`${cert.category}: ${catDesc}`, margin, yPosition);
       
-      yPosition += 12;
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40).text("Reason for Award / Summary:", margin, yPosition);
-      yPosition += 6;
+      yPosition += 10;
+      doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(51, 65, 85).text("Reason for Award / Summary:", margin, yPosition);
+      yPosition += 5;
       
-      // Split description into multiple lines to avoid overflow
       const summaryLines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", contentWidth);
-      doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(60).text(summaryLines, margin, yPosition);
+      doc.setFont("helvetica", "italic").setFontSize(9).setTextColor(100, 116, 139).text(summaryLines, margin, yPosition);
+
+      // Footer
+      doc.setFontSize(7).setTextColor(203, 213, 225).text(`Vaulted with CertiVault • ${new Date().toLocaleDateString()}`, margin, pageHeight - 10);
     }
     return doc.output('blob');
   };
