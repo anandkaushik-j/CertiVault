@@ -22,7 +22,9 @@ import {
   Sparkles,
   ChevronDown,
   Folder,
-  Square
+  Square,
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -87,6 +89,30 @@ const resizeImage = (base64Str: string, maxWidth = 1400, maxHeight = 1400): Prom
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+  });
+};
+
+const rotateImage = (base64: string, degrees: number): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(base64);
+      
+      const angle = (degrees * Math.PI) / 180;
+      const is90Step = degrees % 180 !== 0;
+      
+      canvas.width = is90Step ? img.height : img.width;
+      canvas.height = is90Step ? img.width : img.height;
+      
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(angle);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
     };
   });
 };
@@ -286,18 +312,24 @@ const CertiVault = () => {
     for (let i = 0; i < certs.length; i++) {
       if (i > 0) doc.addPage();
       const cert = certs[i];
+      
+      // Force wait for image loading to avoid "visibility" issues in PDF
       const img = new Image();
       img.src = cert.image;
-      await new Promise(r => img.onload = r);
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
 
-      // 1. Header Information (Top Left)
+      // Professional Layout Styling
+      // 1. Header Information
       doc.setFont("helvetica", "bold").setFontSize(18).setTextColor(30, 41, 59).text(cert.title, margin, 25);
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(100, 116, 139).text(`Issued by: ${cert.issuer}`, margin, 32);
       
-      // 2. Main Image Section
-      // We want the image to be large, centered, and proportional.
+      // 2. High Visibility Certificate Image
+      // Max height available leaving room for metadata footer
       const startY = 42;
-      const maxImgHeight = 160; 
+      const maxImgHeight = 165; 
 
       let finalWidth = contentWidth;
       let finalHeight = (img.naturalHeight * finalWidth) / img.naturalWidth;
@@ -307,17 +339,14 @@ const CertiVault = () => {
         finalWidth = (img.naturalWidth * finalHeight) / img.naturalHeight;
       }
       
-      // Horizontal Center
+      // Center image horizontally within margins
       const xOffset = margin + (contentWidth - finalWidth) / 2;
       doc.addImage(cert.image, 'JPEG', xOffset, startY, finalWidth, finalHeight);
 
-      // 3. Metadata and Description Section
-      let yPosition = startY + finalHeight + 18;
+      // 3. Metadata and Professional Summary Sections
+      let yPosition = startY + finalHeight + 15;
       
-      // Safety check: if image is too tall, move content to bottom or wrap.
-      // Given maxImgHeight=160, startY=42, yPos will be around 220mm. A4 is 297mm. plenty of room.
-      
-      // Horizontal Divider (Matches sample style)
+      // Section Divider Line
       doc.setDrawColor(241, 245, 249);
       doc.setLineWidth(0.5);
       doc.line(margin, yPosition - 8, pageWidth - margin, yPosition - 8);
@@ -325,20 +354,20 @@ const CertiVault = () => {
       // Achievement Category Details
       doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Achievement Category Details:", margin, yPosition);
       yPosition += 6;
-      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Achievement recognition for outstanding performance.";
+      const catDesc = CATEGORY_DESCRIPTIONS[cert.category] || "Special achievement recognition.";
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(71, 85, 105).text(`${cert.category}: ${catDesc}`, margin, yPosition);
       
-      yPosition += 14;
+      yPosition += 12;
       
       // Reason for Award / Summary
       doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(51, 65, 85).text("Reason for Award / Summary:", margin, yPosition);
       yPosition += 6;
       
-      const summaryText = cert.summary || `This certificate acknowledges the outstanding accomplishments and participation of the recipient. Vaulted on ${new Date(cert.createdAt).toLocaleDateString()}.`;
-      const summaryLines = doc.splitTextToSize(summaryText, contentWidth);
+      // Automatic line wrapping for summaries
+      const summaryLines = doc.splitTextToSize(cert.summary || "This certificate acknowledges the outstanding accomplishments and participation of the recipient.", contentWidth);
       doc.setFont("helvetica", "italic").setFontSize(10).setTextColor(100, 116, 139).text(summaryLines, margin, yPosition);
 
-      // 4. Branding Footer
+      // Footer branding
       doc.setFontSize(8).setTextColor(203, 213, 225).text(`Vaulted with CertiVault • ${new Date().toLocaleDateString()}`, margin, pageHeight - 12);
     }
     return doc.output('blob');
@@ -428,6 +457,21 @@ const CertiVault = () => {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelectedIds(next);
+  };
+
+  const handleRotate = async (degrees: number) => {
+    if (pendingCert?.image) {
+      setIsProcessing(true);
+      setProcessStatus('Adjusting orientation...');
+      try {
+        const rotated = await rotateImage(pendingCert.image, degrees);
+        setPendingCert({ ...pendingCert, image: rotated });
+      } catch (err) {
+        setError("Failed to rotate image.");
+      } finally {
+        setIsProcessing(false);
+      }
+    }
   };
 
   return (
@@ -536,7 +580,7 @@ const CertiVault = () => {
                 <div className="relative"><Folder className="w-14 h-14 text-indigo-400 fill-indigo-50" /></div>
                 <div>
                   <span className="font-black text-slate-800 text-base block">{ay}</span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).reduce((acc: number, curr: Certificate[]) => acc + (curr?.length || 0), 0)} Items</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{Object.values(academicHierarchy[ay] || {}).flat().length} Records</span>
                 </div>
               </button>
             )) : !navPath.category ? Object.keys(academicHierarchy[navPath.year!] || {}).map(cat => (
@@ -640,8 +684,12 @@ const CertiVault = () => {
           </header>
           
           <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-40">
-            <div className="aspect-[1.414/1] w-full bg-slate-50 rounded-[2.5rem] flex items-center justify-center p-6 border border-slate-100 shadow-sm mx-auto max-w-lg">
+            <div className="relative aspect-[1.414/1] w-full bg-slate-50 rounded-[2.5rem] flex items-center justify-center p-6 border border-slate-100 shadow-sm mx-auto max-w-lg group">
                <img src={pendingCert.image} className="max-h-full object-contain rounded-lg shadow-sm" />
+               <div className="absolute bottom-6 right-6 flex gap-2">
+                 <button onClick={() => handleRotate(-90)} className="p-4 bg-slate-900/80 backdrop-blur-md text-white rounded-2xl hover:bg-slate-900 shadow-xl transition-all"><RotateCcw className="w-5 h-5" /></button>
+                 <button onClick={() => handleRotate(90)} className="p-4 bg-slate-900/80 backdrop-blur-md text-white rounded-2xl hover:bg-slate-900 shadow-xl transition-all"><RotateCw className="w-5 h-5" /></button>
+               </div>
             </div>
 
             <div className="space-y-6 max-w-lg mx-auto">
