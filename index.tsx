@@ -457,7 +457,7 @@ const CertiVault = () => {
           <div className="flex justify-between items-center mb-6 px-1">
             <div className="flex items-center gap-2 text-sm font-black text-indigo-600 uppercase tracking-tight">
               <button onClick={() => {setNavPath({}); setSearchQuery(''); setSelectedFilterTags([]);}} className="flex items-center gap-2">
-                <Home className="w-5 h-5" /> ROOT
+                <Home className="w-4 h-4" /> ROOT
               </button>
               {navPath.year && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><button onClick={() => setNavPath({ year: navPath.year })} className="hover:text-indigo-800">{navPath.year}</button></>}
               {navPath.category && <><ChevronRightIcon className="w-4 h-4 text-slate-300" /><span>{navPath.category}</span></>}
@@ -511,14 +511,16 @@ const CertiVault = () => {
         <div className="fixed inset-0 bg-black z-[100] flex flex-col overflow-hidden">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           
-          <button 
-            onClick={() => { stopCamera(); setView('dashboard'); }} 
-            className="absolute top-8 left-8 p-4 bg-white/20 backdrop-blur-md rounded-2xl text-white hover:bg-white/30 transition-all z-[110]"
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
+          <div className="absolute top-0 left-0 right-0 p-8 flex justify-between items-center z-[110]">
+            <button 
+              onClick={() => { stopCamera(); setView('dashboard'); }} 
+              className="p-4 bg-white/20 backdrop-blur-md rounded-2xl text-white hover:bg-white/30 transition-all"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+          </div>
 
-          <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center z-[110] pointer-events-none">
+          <div className="absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-black/60 to-transparent flex justify-center items-center z-[110]">
             <button 
               onClick={async () => {
                 if (!videoRef.current) return;
@@ -528,82 +530,98 @@ const CertiVault = () => {
                 const b = canvas.toDataURL('image/jpeg', 0.85);
                 stopCamera(); setView('dashboard'); await processCertificate(await resizeImage(b));
               }} 
-              className="w-20 h-20 rounded-full border-4 border-white/50 p-1 active:scale-90 transition-transform pointer-events-auto bg-transparent"
+              className="w-20 h-20 rounded-full border-4 border-white/50 p-1 active:scale-90 transition-transform bg-transparent"
             >
-              <div className="w-full h-full bg-white rounded-full shadow-lg" />
+              <div className="w-full h-full bg-white rounded-full shadow-2xl" />
             </button>
           </div>
           
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-80 border-2 border-white/20 rounded-xl pointer-events-none">
-            <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-white rounded-tl-lg" />
-            <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-white rounded-tr-lg" />
-            <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-white rounded-bl-lg" />
-            <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-white rounded-br-lg" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 h-96 border-2 border-white/20 rounded-2xl pointer-events-none">
+            <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-white rounded-tl-xl" />
+            <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-white rounded-tr-xl" />
+            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white rounded-bl-xl" />
+            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-white rounded-br-xl" />
           </div>
         </div>
       )}
 
       {view === 'editor' && pendingCert && (
         <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in slide-in-from-bottom duration-500">
-          <header className="p-6 flex justify-between items-center border-b bg-white z-[160] shadow-sm">
-            <button onClick={() => setView('dashboard')} className="p-2.5 bg-slate-50 rounded-xl"><ChevronLeft className="w-5 h-5" /></button>
+          <header className="p-6 pt-8 flex justify-between items-center border-b bg-white z-[160] shadow-sm">
+            <button onClick={() => setView('dashboard')} className="p-3 bg-slate-50 rounded-2xl"><ChevronLeft className="w-6 h-6" /></button>
             <h2 className="text-xl font-black tracking-tight text-slate-900 flex items-center gap-2"><Sparkles className="w-5 h-5 text-indigo-600" /> Verify Achievement</h2>
             <button onClick={() => { 
                 if(!pendingCert.title) return setError("Title required.");
                 setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); 
                 setView('dashboard'); 
-              }} className="text-indigo-600 font-black px-4 uppercase text-sm tracking-widest">Save</button>
+              }} className="text-indigo-600 font-black px-4 uppercase text-sm tracking-widest hover:text-indigo-800">Save</button>
           </header>
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32 bg-slate-50/20">
-            <div className="aspect-[1.414/1] w-full bg-white rounded-[2.5rem] flex items-center justify-center p-4 border border-slate-100 shadow-2xl mx-auto max-w-lg">
+          
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32 bg-white">
+            <div className="aspect-[1.414/1] w-full bg-slate-50 rounded-[2rem] flex items-center justify-center p-4 border border-slate-100 shadow-sm mx-auto max-w-lg mb-4">
                <img src={pendingCert.image} className="max-h-full object-contain rounded-lg" />
             </div>
-            <div className="space-y-6 max-w-lg mx-auto bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
+
+            <div className="space-y-6 max-w-lg mx-auto bg-white rounded-[2rem]">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Achievement Title</label>
-                <input type="text" value={pendingCert.title} onChange={e => setPendingCert({...pendingCert, title: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
+                <input type="text" value={pendingCert.title} onChange={e => setPendingCert({...pendingCert, title: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-slate-800" />
               </div>
+              
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Issued By</label>
-                <input type="text" value={pendingCert.issuer} onChange={e => setPendingCert({...pendingCert, issuer: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all" />
+                <input type="text" value={pendingCert.issuer} onChange={e => setPendingCert({...pendingCert, issuer: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-slate-800" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
+
+              <div className="flex flex-col sm:flex-row gap-6">
+                <div className="flex-1 space-y-2">
                   <div className="flex justify-between items-center px-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Category</label>
                     <button onClick={() => setIsAddingCustomCategory(true)} className="text-[9px] text-indigo-600 font-black uppercase tracking-widest">+ Custom</button>
                   </div>
                   {isAddingCustomCategory ? (
                     <div className="flex gap-2">
-                      <input autoFocus value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} placeholder="New..." className="w-full p-4 bg-indigo-50 rounded-2xl font-bold text-sm outline-none" />
+                      <input autoFocus value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} placeholder="New..." className="w-full p-5 bg-indigo-50 rounded-2xl font-bold text-sm outline-none" />
                       <div className="flex flex-col gap-1">
-                        <button onClick={() => { if (newCategoryInput.trim()) { setCustomCategories(p => [...p, newCategoryInput.trim()]); setPendingCert({...pendingCert, category: newCategoryInput.trim()}); setNewCategoryInput(''); setIsAddingCustomCategory(false); } }} className="p-2 bg-indigo-600 text-white rounded-lg shadow-sm"><Check className="w-4 h-4" /></button>
-                        <button onClick={() => { setIsAddingCustomCategory(false); setNewCategoryInput(''); }} className="p-2 bg-slate-200 text-slate-500 rounded-lg shadow-sm"><X className="w-4 h-4" /></button>
+                        <button onClick={() => { if (newCategoryInput.trim()) { setCustomCategories(p => [...p, newCategoryInput.trim()]); setPendingCert({...pendingCert, category: newCategoryInput.trim()}); setNewCategoryInput(''); setIsAddingCustomCategory(false); } }} className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-md"><Check className="w-4 h-4" /></button>
+                        <button onClick={() => { setIsAddingCustomCategory(false); setNewCategoryInput(''); }} className="p-2.5 bg-slate-200 text-slate-500 rounded-xl shadow-md"><X className="w-4 h-4" /></button>
                       </div>
                     </div>
                   ) : (
-                    <select value={pendingCert.category} onChange={e => setPendingCert({...pendingCert, category: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none">
-                      {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <div className="relative">
+                      <select value={pendingCert.category} onChange={e => setPendingCert({...pendingCert, category: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none appearance-none cursor-pointer text-slate-800">
+                        {categoriesList.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
                   )}
                 </div>
-                <div className="space-y-2">
+                
+                <div className="flex-1 space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Award Date</label>
-                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none" />
+                  <input type="date" value={pendingCert.date} onChange={e => setPendingCert({...pendingCert, date: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none text-slate-800 min-h-[60px] w-full" />
                 </div>
               </div>
+
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Student Name</label>
-                <input type="text" value={pendingCert.studentName} onChange={e => setPendingCert({...pendingCert, studentName: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none" />
+                <input type="text" value={pendingCert.studentName} onChange={e => setPendingCert({...pendingCert, studentName: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-bold text-sm border-none outline-none text-slate-800" />
               </div>
+
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">AI Context / Summary</label>
-                <textarea value={pendingCert.summary} onChange={e => setPendingCert({...pendingCert, summary: e.target.value})} className="w-full p-5 bg-slate-50 rounded-2xl font-medium text-xs h-32 border-none outline-none shadow-inner resize-none leading-relaxed" />
+                <textarea value={pendingCert.summary} onChange={e => setPendingCert({...pendingCert, summary: e.target.value})} className="w-full p-6 bg-slate-50 rounded-3xl font-medium text-xs h-40 border-none outline-none shadow-inner resize-none leading-relaxed text-slate-600" />
               </div>
             </div>
           </div>
-          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t z-[170]">
-            <button onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); setView('dashboard'); }} className="w-full py-5 bg-indigo-600 text-white rounded-3xl font-black shadow-xl shadow-indigo-100 uppercase tracking-widest text-sm">Vault Achievement</button>
+          
+          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white/80 backdrop-blur-xl border-t z-[170]">
+            <button 
+              onClick={() => { if(!pendingCert.title) return; setCertificates(p => [{ ...pendingCert, profileId: activeProfileId } as Certificate, ...p]); setView('dashboard'); }} 
+              className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl shadow-indigo-100 uppercase tracking-widest text-sm hover:bg-indigo-700 transition-colors"
+            >
+              Vault Achievement
+            </button>
           </div>
         </div>
       )}
@@ -660,7 +678,7 @@ const CertiVault = () => {
               <h3 className="text-2xl font-black tracking-tight text-slate-900">New Achievement Vault</h3>
               <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Organize by person or department</p>
             </div>
-            <input autoFocus type="text" placeholder="Profile name..." value={newProfileName} onChange={e => setNewProfileName(e.target.value)} className="w-full p-5 bg-slate-50 rounded-2xl font-black outline-none border border-slate-100" />
+            <input autoFocus type="text" placeholder="Profile name..." value={newProfileName} onChange={e => setNewProfileName(e.target.value)} className="w-full p-5 bg-slate-50 rounded-2xl font-black outline-none border border-slate-100 focus:ring-2 focus:ring-indigo-100 transition-all" />
             <div className="flex gap-4">
               <button onClick={() => setIsAddingProfile(false)} className="flex-1 py-4 text-slate-400 font-black text-xs uppercase tracking-widest">Cancel</button>
               <button onClick={() => { if(newProfileName.trim()) { const n = { id: Date.now().toString(), name: newProfileName.trim() }; setProfiles(p => [...p, n]); setActiveProfileId(n.id); setNewProfileName(''); setIsAddingProfile(false); setNavPath({}); } }} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100">Create Vault</button>
